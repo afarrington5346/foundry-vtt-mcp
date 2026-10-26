@@ -78,6 +78,7 @@ export class QueryHandlers {
     // Chat queries
     CONFIG.queries[`${modulePrefix}.post-chat`] = this.handlePostChat.bind(this);
     CONFIG.queries[`${modulePrefix}.read-chat`] = this.handleReadChat.bind(this);
+    CONFIG.queries[`${modulePrefix}.roll-dice`] = this.handleRollDice.bind(this);
 
     // Enhanced creature index for campaign analysis
     CONFIG.queries[`${modulePrefix}.getEnhancedCreatureIndex`] =
@@ -838,6 +839,23 @@ export class QueryHandlers {
     } catch (error) {
       throw new Error(
         `Failed to read chat: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  private async handleRollDice(data: any): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+      if (!data?.formula || !data?.speaker) {
+        throw new Error('formula and speaker are required');
+      }
+      return await this.dataAccess.rollDice({ mode: 'public', ...data });
+    } catch (error) {
+      throw new Error(
+        `Failed to roll dice: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }

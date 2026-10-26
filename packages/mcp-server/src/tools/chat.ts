@@ -63,7 +63,57 @@ export class ChatTools {
           },
         },
       },
+      {
+        name: 'roll-dice',
+        description:
+          'Roll a dice formula with Foundry\'s own Roll and post it to chat as a named speaker (e.g. "Goblin"), with normal dice rendering. If the speaker exactly matches a world actor, the roll is linked to that actor and can use its roll data (e.g. "1d20 + @abilities.dex.mod"). Returns the total and each die\'s results.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            formula: { type: 'string', description: 'Dice formula, e.g. "1d20+4" or "2d6kh1"' },
+            speaker: {
+              type: 'string',
+              description: 'Name shown as the roller, e.g. "Goblin", "Rovnig", "GM"',
+            },
+            flavor: {
+              type: 'string',
+              description: 'Label shown above the roll, e.g. "Stealth check"',
+            },
+            mode: {
+              type: 'string',
+              enum: ['public', 'gm-only', 'self'],
+              description:
+                'public: everyone sees it (default). gm-only: blind roll, only GMs see it. self: only the rolling user sees it.',
+            },
+          },
+          required: ['formula', 'speaker'],
+        },
+      },
     ];
+  }
+
+  async handleRollDice(args: any): Promise<any> {
+    const schema = z.object({
+      formula: z.string().min(1),
+      speaker: z.string().min(1),
+      flavor: z.string().optional(),
+      mode: z.enum(['public', 'gm-only', 'self']).default('public'),
+    });
+    const parsed = schema.parse(args);
+
+    this.logger.info('Rolling dice', {
+      formula: parsed.formula,
+      speaker: parsed.speaker,
+      mode: parsed.mode,
+    });
+    try {
+      return await this.foundryClient.query('foundry-mcp-bridge.roll-dice', parsed);
+    } catch (error) {
+      this.logger.error('Failed to roll dice', error);
+      throw new Error(
+        `Failed to roll dice: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
   }
 
   async handlePostChat(args: any): Promise<any> {

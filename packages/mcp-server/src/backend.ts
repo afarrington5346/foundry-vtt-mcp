@@ -1802,6 +1802,11 @@ async function startBackend(): Promise<void> {
 
                   break;
 
+                case 'roll-dice':
+                  result = await chatTools.handleRollDice(args);
+
+                  break;
+
                 default:
                   throw new Error(`Unknown tool: ${name}`);
               }

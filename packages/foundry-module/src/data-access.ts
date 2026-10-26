@@ -7917,6 +7917,78 @@ export class FoundryDataAccess {
   // ===== CHAT METHODS =====
 
   /**
+   * Build a chat speaker for an alias, linked to the world actor of the same
+   * name (exact, case-insensitive) when there is one.
+   */
+  private resolveChatSpeaker(name: string): { alias: string; actor: any; speaker: any } {
+    const alias = name.trim();
+    const actor = (game.actors as any)?.find(
+      (a: any) => a.name?.toLowerCase() === alias.toLowerCase()
+    );
+    const speaker = actor
+      ? { ...ChatMessage.getSpeaker({ actor }), alias }
+      : { scene: null, actor: null, token: null, alias };
+    return { alias, actor, speaker };
+  }
+
+  /**
+   * Roll a formula with Foundry's Roll and post it to chat as `speaker`.
+   * mode: public = everyone sees it; gm-only = blind roll (GMs only);
+   * self = only the rolling user.
+   */
+  async rollDice(options: {
+    formula: string;
+    speaker: string;
+    flavor?: string;
+    mode: 'public' | 'gm-only' | 'self';
+  }): Promise<any> {
+    this.validateFoundryState();
+
+    const formula = options.formula.trim();
+    if (!Roll.validate(formula)) {
+      throw new Error(`Invalid roll formula: ${formula}`);
+    }
+
+    const modes: Record<string, string> = {
+      public: 'publicroll',
+      'gm-only': 'blindroll',
+      self: 'selfroll',
+    };
+    const rollMode = modes[options.mode];
+    if (!rollMode) throw new Error(`Unknown roll mode: ${options.mode}`);
+
+    const { alias, actor, speaker } = this.resolveChatSpeaker(options.speaker);
+
+    const roll: any = new Roll(formula, actor?.getRollData?.() ?? {});
+    await roll.evaluate();
+
+    const chatMessage: any = await roll.toMessage(
+      {
+        speaker,
+        ...(options.flavor ? { flavor: options.flavor } : {}),
+      },
+      { create: true, rollMode }
+    );
+
+    return {
+      success: true,
+      messageId: chatMessage?.id ?? null,
+      speaker: alias,
+      linkedActor: actor ? actor.name : null,
+      mode: options.mode,
+      formula: roll.formula,
+      total: roll.total,
+      dice: roll.dice.map((d: any) => ({
+        term: `${d.number}d${d.faces}`,
+        faces: d.faces,
+        results: d.results.filter((r: any) => r.active !== false).map((r: any) => r.result),
+        discarded: d.results.filter((r: any) => r.active === false).map((r: any) => r.result),
+      })),
+      result: roll.result,
+    };
+  }
+
+  /**
    * Post a chat message under a speaker alias. If the alias names a world actor
    * (exact, case-insensitive), the message is linked to it so its portrait shows.
    * `whisperTo` takes player names or the names of their assigned characters.
@@ -7928,13 +8000,7 @@ export class FoundryDataAccess {
   }): Promise<any> {
     this.validateFoundryState();
 
-    const alias = options.speaker.trim();
-    const actor = (game.actors as any)?.find(
-      (a: any) => a.name?.toLowerCase() === alias.toLowerCase()
-    );
-    const speaker = actor
-      ? { ...ChatMessage.getSpeaker({ actor }), alias }
-      : { scene: null, actor: null, token: null, alias };
+    const { alias, actor, speaker } = this.resolveChatSpeaker(options.speaker);
 
     const whisperUsers: any[] = [];
     for (const target of options.whisperTo ?? []) {
