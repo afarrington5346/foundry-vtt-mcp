@@ -205,6 +205,7 @@ export class QueryHandlers {
       'scene-sounds': d => table.sceneSounds(d),
       'move-party': d => table.moveParty(d),
       'preload-scene': d => table.preloadScene(d),
+      'scene-navigation': d => table.sceneNavigation(d),
       'character-audit': d => character.characterAudit(d),
       'ddb-import': d => character.ddbImport(d),
     };

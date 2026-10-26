@@ -894,6 +894,60 @@ export class TableTools {
     };
   }
 
+  // ===== scene-navigation =====
+
+  /**
+   * List the scenes shown in the navigation bar, or turn navigation on/off for
+   * named scenes. Only ids, names and visibility are returned; scene contents
+   * are never read.
+   */
+  async sceneNavigation(options: {
+    action: 'list' | 'set';
+    scenes?: string[];
+    navigation?: boolean;
+  }): Promise<any> {
+    this.dataAccess.validateFoundryState();
+    const players = Array.from<any>(game.users ?? []).filter(u => !u.isGM);
+    const describe = (s: any) => ({
+      sceneId: s.id,
+      name: s.name,
+      navigation: s.navigation,
+      active: s.active,
+      // A player's bar lists a navigation scene only if they can see it (Limited or better).
+      inPlayerBars: s.navigation
+        ? players.filter(u => s.testUserPermission(u, 'LIMITED')).map(u => u.name)
+        : [],
+    });
+
+    if (options.action === 'list') {
+      const shown = Array.from<any>(game.scenes ?? []).filter(s => s.navigation);
+      return { success: true, count: shown.length, scenes: shown.map(describe) };
+    }
+
+    if (options.action !== 'set') {
+      throw new Error(`Unknown scene-navigation action: ${String(options.action)}`);
+    }
+    if (!options.scenes?.length) throw new Error('set needs scenes');
+    if (typeof options.navigation !== 'boolean')
+      throw new Error('set needs navigation: true or false');
+    // Resolve every name first, so one typo changes nothing.
+    const targets = options.scenes.map(ref => this.dataAccess.resolveTargetScene(ref));
+    const changed: string[] = [];
+    for (const scene of targets) {
+      if (scene.navigation !== options.navigation) {
+        await scene.update({ navigation: options.navigation });
+        changed.push(scene.name);
+      }
+    }
+    return {
+      success: true,
+      navigation: options.navigation,
+      changed,
+      unchanged: targets.filter(s => !changed.includes(s.name)).map(s => s.name),
+      scenes: targets.map(describe),
+    };
+  }
+
   // ===== preload-scene =====
 
   async preloadScene(options: { sceneId: string }): Promise<any> {

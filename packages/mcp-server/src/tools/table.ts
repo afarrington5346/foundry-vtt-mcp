@@ -89,6 +89,11 @@ const SCHEMAS = {
     activate: z.boolean().default(false),
   }),
   'preload-scene': z.object({ scene: z.string().min(1) }),
+  'scene-navigation': z.object({
+    action: z.enum(['list', 'set']),
+    scenes: z.array(z.string().min(1)).optional(),
+    navigation: z.boolean().optional(),
+  }),
   'character-audit': z.object({ actor: z.string().min(1) }),
   'ddb-import': z.object({
     url: z.string().min(1),
@@ -316,6 +321,24 @@ export class TableTools {
             },
           },
           required: ['scene'],
+        },
+      },
+      {
+        name: 'scene-navigation',
+        description:
+          "Scene navigation bar: list (the scenes that have navigation on, and which players' bars can show them) or set (turn navigation on or off for named scenes). Only IDs and names are returned, never scene contents.",
+        inputSchema: {
+          type: 'object',
+          properties: {
+            action: { type: 'string', enum: ['list', 'set'] },
+            scenes: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'set: scene IDs or exact names',
+            },
+            navigation: { type: 'boolean', description: 'set: true to show, false to hide' },
+          },
+          required: ['action'],
         },
       },
       {
