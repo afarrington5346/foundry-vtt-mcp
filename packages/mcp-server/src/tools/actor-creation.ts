@@ -56,7 +56,8 @@ export class ActorCreationTools {
             },
             addToScene: {
               type: 'boolean',
-              description: 'Whether to add created actors to the current scene as tokens',
+              description:
+                'Whether to add created actors as tokens to a scene (the active scene unless placement.scene is given)',
               default: false,
             },
             placement: {
@@ -68,6 +69,11 @@ export class ActorCreationTools {
                   enum: ['random', 'grid', 'center', 'coordinates'],
                   description: 'Placement strategy',
                   default: 'grid',
+                },
+                scene: {
+                  type: 'string',
+                  description:
+                    'Scene ID or exact name to place tokens on, without activating it. Defaults to the active scene.',
                 },
                 coordinates: {
                   type: 'array',
@@ -132,6 +138,7 @@ export class ActorCreationTools {
               })
             )
             .optional(),
+          scene: z.string().min(1).optional(),
         })
         .optional(),
     });
@@ -168,6 +175,7 @@ export class ActorCreationTools {
             ? {
                 type: placement.type,
                 coordinates: placement.coordinates,
+                sceneId: placement.scene,
               }
             : undefined,
         }

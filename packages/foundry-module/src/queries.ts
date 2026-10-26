@@ -2,14 +2,20 @@ import { MODULE_ID } from './constants.js';
 import { FoundryDataAccess } from './data-access.js';
 import { ComfyUIManager } from './comfyui-manager.js';
 import { guardQueryHandler } from './query-guard.js';
+import { TableTools } from './table-tools.js';
+import { CharacterTools } from './character-tools.js';
 
 export class QueryHandlers {
   public dataAccess: FoundryDataAccess;
   private comfyuiManager: ComfyUIManager;
+  private tableTools: TableTools;
+  private characterTools: CharacterTools;
 
   constructor() {
     this.dataAccess = new FoundryDataAccess();
     this.comfyuiManager = new ComfyUIManager();
+    this.tableTools = new TableTools(this.dataAccess);
+    this.characterTools = new CharacterTools(this.dataAccess);
   }
 
   /**
@@ -170,6 +176,41 @@ export class QueryHandlers {
     CONFIG.queries[`${modulePrefix}.addSpellsToActor`] = this.handleAddSpellsToActor.bind(this);
     CONFIG.queries[`${modulePrefix}.addFeaturesFromCompendium`] =
       this.handleAddFeaturesFromCompendium.bind(this);
+
+    // Table and character tools (v0.8.6): GM-only, errors carry the tool name.
+    const gmOnly =
+      (tool: string, fn: (data: any) => Promise<any>) =>
+      async (data: any): Promise<any> => {
+        if (!this.validateGMAccess().allowed) {
+          return { error: 'Access denied', success: false };
+        }
+        try {
+          return await fn(data ?? {});
+        } catch (error) {
+          throw new Error(
+            `${tool} failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+          );
+        }
+      };
+    const table = this.tableTools;
+    const character = this.characterTools;
+    const v086: Record<string, (data: any) => Promise<any>> = {
+      'token-hp': d => table.tokenHp(d),
+      combat: d => table.combat(d),
+      'token-grid': d => table.tokenGrid(d),
+      'scene-snapshot': d => table.sceneSnapshot(d),
+      'show-journal': d => table.showJournal(d),
+      doors: d => table.doors(d),
+      'run-macro': d => table.runMacro(d),
+      'scene-sounds': d => table.sceneSounds(d),
+      'move-party': d => table.moveParty(d),
+      'preload-scene': d => table.preloadScene(d),
+      'character-audit': d => character.characterAudit(d),
+      'ddb-import': d => character.ddbImport(d),
+    };
+    for (const [tool, fn] of Object.entries(v086)) {
+      CONFIG.queries[`${modulePrefix}.${tool}`] = gmOnly(tool, fn);
+    }
 
     // SECURITY: these handlers are reachable by any connected user through Foundry's
     // User#query, so only accept those calls from a GM. See query-guard.ts.
@@ -422,7 +463,7 @@ export class QueryHandlers {
   /**
    * Handle get active scene request
    */
-  private async handleGetActiveScene(): Promise<any> {
+  private async handleGetActiveScene(data?: { sceneId?: string }): Promise<any> {
     try {
       // SECURITY: Silent GM validation
       const gmCheck = this.validateGMAccess();
@@ -431,7 +472,7 @@ export class QueryHandlers {
       }
 
       this.dataAccess.validateFoundryState();
-      return await this.dataAccess.getActiveScene();
+      return await this.dataAccess.getActiveScene(data?.sceneId);
     } catch (error) {
       throw new Error(
         `Failed to get active scene: ${error instanceof Error ? error.message : 'Unknown error'}`
@@ -506,6 +547,7 @@ export class QueryHandlers {
       | {
           type: 'random' | 'grid' | 'center' | 'coordinates';
           coordinates?: { x: number; y: number }[];
+          sceneId?: string;
         }
       | undefined;
   }): Promise<any> {

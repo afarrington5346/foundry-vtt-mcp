@@ -24,7 +24,7 @@ export class SceneTools {
       {
         name: 'get-current-scene',
         description:
-          'Get information about the currently active scene, including tokens, layout, and the music binding (playlist + playlistSound)',
+          'Get information about a scene (the active scene unless `scene` is given), including tokens, layout, map notes, and the music binding (playlist + playlistSound). Reading another scene does not activate it.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -37,6 +37,10 @@ export class SceneTools {
               type: 'boolean',
               description: 'Whether to include hidden tokens and elements (default: false)',
               default: false,
+            },
+            scene: {
+              type: 'string',
+              description: 'Scene ID or exact name. Defaults to the active scene.',
             },
           },
         },
@@ -79,14 +83,17 @@ export class SceneTools {
     const schema = z.object({
       includeTokens: z.boolean().default(true),
       includeHidden: z.boolean().default(false),
+      scene: z.string().min(1).optional(),
     });
 
-    const { includeTokens, includeHidden } = schema.parse(args);
+    const { includeTokens, includeHidden, scene } = schema.parse(args);
 
     this.logger.info('Getting current scene information', { includeTokens, includeHidden });
 
     try {
-      const sceneData = await this.foundryClient.query('foundry-mcp-bridge.getActiveScene');
+      const sceneData = await this.foundryClient.query('foundry-mcp-bridge.getActiveScene', {
+        sceneId: scene,
+      });
 
       this.logger.debug('Successfully retrieved scene data', {
         sceneId: sceneData.id,

@@ -7,6 +7,12 @@ export interface TokenManipulationToolsOptions {
   logger: Logger;
 }
 
+const SCENE_PROPERTY = {
+  type: 'string',
+  description:
+    'Scene ID or exact name. Defaults to the active scene; any other scene can be edited without activating it or showing it to players.',
+};
+
 export class TokenManipulationTools {
   private foundryClient: FoundryClient;
   private logger: Logger;
@@ -24,7 +30,7 @@ export class TokenManipulationTools {
       {
         name: 'move-token',
         description:
-          'Move a token to a new position on the current scene. Can optionally animate the movement.',
+          'Move a token to a new position on a scene (the active scene unless `scene` is given). Can optionally animate the movement.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -32,6 +38,7 @@ export class TokenManipulationTools {
               type: 'string',
               description: 'The ID of the token to move',
             },
+            scene: SCENE_PROPERTY,
             x: {
               type: 'number',
               description: 'The new X coordinate (in pixels)',
@@ -60,6 +67,7 @@ export class TokenManipulationTools {
               type: 'string',
               description: 'The ID of the token to update',
             },
+            scene: SCENE_PROPERTY,
             updates: {
               type: 'object',
               description: 'Object containing the properties to update',
@@ -113,7 +121,8 @@ export class TokenManipulationTools {
       },
       {
         name: 'delete-tokens',
-        description: 'Delete one or more tokens from the current scene',
+        description:
+          'Delete one or more tokens from a scene (the active scene unless `scene` is given)',
         inputSchema: {
           type: 'object',
           properties: {
@@ -125,6 +134,7 @@ export class TokenManipulationTools {
               },
               minItems: 1,
             },
+            scene: SCENE_PROPERTY,
           },
           required: ['tokenIds'],
         },
@@ -140,6 +150,7 @@ export class TokenManipulationTools {
               type: 'string',
               description: 'The ID of the token to get details for',
             },
+            scene: SCENE_PROPERTY,
           },
           required: ['tokenId'],
         },
@@ -155,6 +166,7 @@ export class TokenManipulationTools {
               type: 'string',
               description: 'The ID of the token to modify',
             },
+            scene: SCENE_PROPERTY,
             conditionId: {
               type: 'string',
               description:
@@ -187,9 +199,10 @@ export class TokenManipulationTools {
       x: z.number(),
       y: z.number(),
       animate: z.boolean().optional().default(false),
+      scene: z.string().min(1).optional(),
     });
 
-    const { tokenId, x, y, animate } = schema.parse(args);
+    const { tokenId, x, y, animate, scene } = schema.parse(args);
 
     this.logger.info('Moving token', { tokenId, x, y, animate });
 
@@ -199,6 +212,7 @@ export class TokenManipulationTools {
         x,
         y,
         animate,
+        sceneId: scene,
       });
 
       this.logger.debug('Token moved successfully', { tokenId });
@@ -232,9 +246,10 @@ export class TokenManipulationTools {
         elevation: z.number().optional(),
         lockRotation: z.boolean().optional(),
       }),
+      scene: z.string().min(1).optional(),
     });
 
-    const { tokenId, updates } = schema.parse(args);
+    const { tokenId, updates, scene } = schema.parse(args);
 
     this.logger.info('Updating token', { tokenId, updates });
 
@@ -242,6 +257,7 @@ export class TokenManipulationTools {
       const result = await this.foundryClient.query('foundry-mcp-bridge.update-token', {
         tokenId,
         updates,
+        sceneId: scene,
       });
 
       this.logger.debug('Token updated successfully', { tokenId, result });
@@ -263,15 +279,17 @@ export class TokenManipulationTools {
   async handleDeleteTokens(args: any): Promise<any> {
     const schema = z.object({
       tokenIds: z.array(z.string()).min(1),
+      scene: z.string().min(1).optional(),
     });
 
-    const { tokenIds } = schema.parse(args);
+    const { tokenIds, scene } = schema.parse(args);
 
     this.logger.info('Deleting tokens', { count: tokenIds.length, tokenIds });
 
     try {
       const result = await this.foundryClient.query('foundry-mcp-bridge.delete-tokens', {
         tokenIds,
+        sceneId: scene,
       });
 
       this.logger.debug('Tokens deleted successfully', {
@@ -296,15 +314,17 @@ export class TokenManipulationTools {
   async handleGetTokenDetails(args: any): Promise<any> {
     const schema = z.object({
       tokenId: z.string(),
+      scene: z.string().min(1).optional(),
     });
 
-    const { tokenId } = schema.parse(args);
+    const { tokenId, scene } = schema.parse(args);
 
     this.logger.info('Getting token details', { tokenId });
 
     try {
       const tokenData = await this.foundryClient.query('foundry-mcp-bridge.get-token-details', {
         tokenId,
+        sceneId: scene,
       });
 
       this.logger.debug('Retrieved token details', {
@@ -375,9 +395,10 @@ export class TokenManipulationTools {
       tokenId: z.string(),
       conditionId: z.string(),
       active: z.boolean().optional(),
+      scene: z.string().min(1).optional(),
     });
 
-    const { tokenId, conditionId, active } = schema.parse(args);
+    const { tokenId, conditionId, active, scene } = schema.parse(args);
 
     this.logger.info('Toggling token condition', { tokenId, conditionId, active });
 
@@ -386,6 +407,7 @@ export class TokenManipulationTools {
         tokenId,
         conditionId,
         active,
+        sceneId: scene,
       });
 
       this.logger.debug('Token condition toggled successfully', { tokenId, conditionId, result });

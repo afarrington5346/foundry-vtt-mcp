@@ -54,7 +54,7 @@ export class FoundryClient {
     return this.connector.getConnectionType();
   }
 
-  async query(method: string, data?: any): Promise<any> {
+  async query(method: string, data?: any, options?: { timeoutMs?: number }): Promise<any> {
     if (!this.connector.isConnected()) {
       throw new Error(
         'Foundry VTT module not connected. Please ensure Foundry is running and the MCP Bridge module is enabled.'
@@ -64,7 +64,7 @@ export class FoundryClient {
     this.logger.debug('Sending query to Foundry module', { method, data });
 
     try {
-      const result = await this.connector.query(method, data);
+      const result = await this.connector.query(method, data, options);
       this.logger.debug('Query successful', { method, hasResult: !!result });
       return result;
     } catch (error) {

@@ -309,6 +309,7 @@ interface SceneTokenPlacement {
   placement: 'random' | 'grid' | 'center' | 'coordinates';
   hidden: boolean;
   coordinates?: { x: number; y: number }[];
+  sceneId?: string;
 }
 
 interface TokenPlacementResult {
@@ -3852,8 +3853,8 @@ export class FoundryDataAccess {
   /**
    * Get active scene information
    */
-  async getActiveScene(): Promise<SceneInfo> {
-    const scene = (game.scenes as any).current;
+  async getActiveScene(sceneId?: string): Promise<SceneInfo> {
+    const scene = sceneId ? this.findSceneByIdentifier(sceneId) : (game.scenes as any).current;
     if (!scene) {
       throw new Error(ERROR_MESSAGES.SCENE_NOT_FOUND);
     }
@@ -4646,6 +4647,7 @@ export class FoundryDataAccess {
     placement?: {
       type: 'random' | 'grid' | 'center' | 'coordinates';
       coordinates?: { x: number; y: number }[];
+      sceneId?: string;
     };
   }): Promise<ActorCreationResult> {
     this.validateFoundryState();
@@ -4752,6 +4754,7 @@ export class FoundryDataAccess {
             placement: placement?.type || 'grid',
             hidden: false,
             ...(placement?.coordinates && { coordinates: placement.coordinates }),
+            ...(placement?.sceneId && { sceneId: placement.sceneId }),
           });
           tokensPlaced = sceneResult.success ? sceneResult.tokensCreated : 0;
         } catch (error) {
@@ -5513,10 +5516,7 @@ export class FoundryDataAccess {
     // Audit the permission check
     permissionManager.auditPermissionCheck('modifyScene', permissionCheck, placement);
 
-    const scene = (game.scenes as any).current;
-    if (!scene) {
-      throw new Error('No active scene found');
-    }
+    const scene = this.resolveTargetScene(placement.sceneId);
 
     this.auditLog('addActorsToScene', placement, 'success');
 
@@ -7549,6 +7549,19 @@ export class FoundryDataAccess {
    * Find a scene by id or exact name (case-insensitive). Shared by the
    * scene music methods; mirrors the switchScene lookup.
    */
+  /**
+   * The scene a scene-dependent tool acts on: the one named by id or exact
+   * name, or the active scene when none is given.
+   */
+  resolveTargetScene(identifier?: string): any {
+    if (identifier) return this.findSceneByIdentifier(identifier);
+    const scene = (game.scenes as any).current;
+    if (!scene) {
+      throw new Error('No active scene found');
+    }
+    return scene;
+  }
+
   private findSceneByIdentifier(identifier: string): any {
     const scenes = game.scenes?.contents || [];
     const target = scenes.find(
@@ -8266,6 +8279,7 @@ export class FoundryDataAccess {
     x: number;
     y: number;
     animate?: boolean;
+    sceneId?: string;
   }): Promise<any> {
     this.validateFoundryState();
 
@@ -8279,14 +8293,11 @@ export class FoundryDataAccess {
     }
 
     try {
-      const scene = (game.scenes as any).current;
-      if (!scene) {
-        throw new Error('No active scene found');
-      }
+      const scene = this.resolveTargetScene(data.sceneId);
 
       const token = scene.tokens.get(data.tokenId);
       if (!token) {
-        throw new Error(`Token ${data.tokenId} not found in current scene`);
+        throw new Error(`Token ${data.tokenId} not found in scene "${scene.name}"`);
       }
 
       // Update token position
@@ -8323,7 +8334,11 @@ export class FoundryDataAccess {
   /**
    * Update token properties
    */
-  async updateToken(data: { tokenId: string; updates: Record<string, any> }): Promise<any> {
+  async updateToken(data: {
+    tokenId: string;
+    updates: Record<string, any>;
+    sceneId?: string;
+  }): Promise<any> {
     this.validateFoundryState();
 
     // Use permission system
@@ -8336,14 +8351,11 @@ export class FoundryDataAccess {
     }
 
     try {
-      const scene = (game.scenes as any).current;
-      if (!scene) {
-        throw new Error('No active scene found');
-      }
+      const scene = this.resolveTargetScene(data.sceneId);
 
       const token = scene.tokens.get(data.tokenId);
       if (!token) {
-        throw new Error(`Token ${data.tokenId} not found in current scene`);
+        throw new Error(`Token ${data.tokenId} not found in scene "${scene.name}"`);
       }
 
       // Filter out undefined values
@@ -8378,7 +8390,7 @@ export class FoundryDataAccess {
   /**
    * Delete one or more tokens from the scene
    */
-  async deleteTokens(data: { tokenIds: string[] }): Promise<any> {
+  async deleteTokens(data: { tokenIds: string[]; sceneId?: string }): Promise<any> {
     this.validateFoundryState();
 
     // Use permission system
@@ -8391,10 +8403,7 @@ export class FoundryDataAccess {
     }
 
     try {
-      const scene = (game.scenes as any).current;
-      if (!scene) {
-        throw new Error('No active scene found');
-      }
+      const scene = this.resolveTargetScene(data.sceneId);
 
       const deletedTokens: string[] = [];
       const failedTokens: string[] = [];
@@ -8441,18 +8450,15 @@ export class FoundryDataAccess {
   /**
    * Get detailed information about a token
    */
-  async getTokenDetails(data: { tokenId: string }): Promise<any> {
+  async getTokenDetails(data: { tokenId: string; sceneId?: string }): Promise<any> {
     this.validateFoundryState();
 
     try {
-      const scene = (game.scenes as any).current;
-      if (!scene) {
-        throw new Error('No active scene found');
-      }
+      const scene = this.resolveTargetScene(data.sceneId);
 
       const token = scene.tokens.get(data.tokenId);
       if (!token) {
-        throw new Error(`Token ${data.tokenId} not found in current scene`);
+        throw new Error(`Token ${data.tokenId} not found in scene "${scene.name}"`);
       }
 
       // Return flat structure that matches MCP server expectations
@@ -8496,6 +8502,7 @@ export class FoundryDataAccess {
     tokenId: string;
     conditionId: string;
     active: boolean;
+    sceneId?: string;
   }): Promise<any> {
     this.validateFoundryState();
 
@@ -8509,14 +8516,11 @@ export class FoundryDataAccess {
     }
 
     try {
-      const scene = (game.scenes as any).current;
-      if (!scene) {
-        throw new Error('No active scene found');
-      }
+      const scene = this.resolveTargetScene(data.sceneId);
 
       const token = scene.tokens.get(data.tokenId);
       if (!token) {
-        throw new Error(`Token ${data.tokenId} not found in current scene`);
+        throw new Error(`Token ${data.tokenId} not found in scene "${scene.name}"`);
       }
 
       const actor = token.actor;

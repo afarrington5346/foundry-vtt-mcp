@@ -23,6 +23,7 @@ import { CompendiumTools } from './tools/compendium.js';
 import { SceneTools } from './tools/scene.js';
 import { PlaylistTools } from './tools/playlist.js';
 import { ChatTools } from './tools/chat.js';
+import { TableTools } from './tools/table.js';
 
 import { ActorCreationTools } from './tools/actor-creation.js';
 import { ActorManagementTools } from './tools/actor-management.js';
@@ -1197,6 +1198,7 @@ async function startBackend(): Promise<void> {
   const playlistTools = new PlaylistTools({ foundryClient, logger });
 
   const chatTools = new ChatTools({ foundryClient, logger });
+  const tableTools = new TableTools({ foundryClient, logger });
 
   const actorCreationTools = new ActorCreationTools({ foundryClient, logger });
   const actorManagementTools = new ActorManagementTools({ foundryClient, logger, systemRegistry });
@@ -1456,6 +1458,8 @@ async function startBackend(): Promise<void> {
     ...playlistTools.getToolDefinitions(),
 
     ...chatTools.getToolDefinitions(),
+
+    ...tableTools.getToolDefinitions(),
   ];
 
   // Start Foundry connector (owns app port 31415)
@@ -1808,11 +1812,19 @@ async function startBackend(): Promise<void> {
                   break;
 
                 default:
+                  if (tableTools.handles(name)) {
+                    result = await tableTools.handle(name, args);
+                    break;
+                  }
                   throw new Error(`Unknown tool: ${name}`);
               }
 
+              // Tools can return an image as result.__image ({ data: base64, mimeType }).
+              const image = result && typeof result === 'object' ? result.__image : undefined;
+              if (image) delete result.__image;
               const payload = {
                 content: [
+                  ...(image ? [{ type: 'image', data: image.data, mimeType: image.mimeType }] : []),
                   {
                     type: 'text',
                     text: typeof result === 'string' ? result : JSON.stringify(result),
