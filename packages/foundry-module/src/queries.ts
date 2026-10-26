@@ -75,6 +75,10 @@ export class QueryHandlers {
     CONFIG.queries[`${modulePrefix}.request-player-rolls`] =
       this.handleRequestPlayerRolls.bind(this);
 
+    // Chat queries
+    CONFIG.queries[`${modulePrefix}.post-chat`] = this.handlePostChat.bind(this);
+    CONFIG.queries[`${modulePrefix}.read-chat`] = this.handleReadChat.bind(this);
+
     // Enhanced creature index for campaign analysis
     CONFIG.queries[`${modulePrefix}.getEnhancedCreatureIndex`] =
       this.handleGetEnhancedCreatureIndex.bind(this);
@@ -803,6 +807,37 @@ export class QueryHandlers {
     } catch (error) {
       throw new Error(
         `Failed to request player rolls: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  private async handlePostChat(data: any): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+      if (!data?.message || !data?.speaker) {
+        throw new Error('message and speaker are required');
+      }
+      return await this.dataAccess.postChatMessage(data);
+    } catch (error) {
+      throw new Error(
+        `Failed to post chat message: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  private async handleReadChat(data: any): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+      return await this.dataAccess.readChatMessages({ limit: 50, ...data });
+    } catch (error) {
+      throw new Error(
+        `Failed to read chat: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }

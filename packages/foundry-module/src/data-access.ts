@@ -7914,6 +7914,142 @@ export class FoundryDataAccess {
     }
   }
 
+  // ===== CHAT METHODS =====
+
+  /**
+   * Post a chat message under a speaker alias. If the alias names a world actor
+   * (exact, case-insensitive), the message is linked to it so its portrait shows.
+   * `whisperTo` takes player names or the names of their assigned characters.
+   */
+  async postChatMessage(options: {
+    message: string;
+    speaker: string;
+    whisperTo?: string[];
+  }): Promise<any> {
+    this.validateFoundryState();
+
+    const alias = options.speaker.trim();
+    const actor = (game.actors as any)?.find(
+      (a: any) => a.name?.toLowerCase() === alias.toLowerCase()
+    );
+    const speaker = actor
+      ? { ...ChatMessage.getSpeaker({ actor }), alias }
+      : { scene: null, actor: null, token: null, alias };
+
+    const whisperUsers: any[] = [];
+    for (const target of options.whisperTo ?? []) {
+      const term = target.toLowerCase().trim();
+      const users = Array.from((game.users as any)?.values() ?? []) as any[];
+      const user =
+        users.find(u => u.name?.toLowerCase() === term) ??
+        users.find(u => !u.isGM && u.character?.name?.toLowerCase() === term);
+      if (!user) {
+        const known = users.map(u => u.name).join(', ');
+        throw new Error(`No player or assigned character named "${target}". Players: ${known}`);
+      }
+      if (!whisperUsers.includes(user)) whisperUsers.push(user);
+    }
+
+    const escape = (s: string) =>
+      s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const content = options.message
+      .split(/\n{2,}/)
+      .map(p => `<p>${escape(p).replace(/\n/g, '<br>')}</p>`)
+      .join('');
+
+    const chatMessage: any = await ChatMessage.create({
+      content,
+      speaker,
+      whisper: whisperUsers.map(u => u.id),
+      style: (CONST as any).CHAT_MESSAGE_STYLES?.IC ?? 2,
+    } as any);
+
+    return {
+      success: true,
+      messageId: chatMessage.id,
+      timestamp: chatMessage.timestamp,
+      speaker: alias,
+      linkedActor: actor ? actor.name : null,
+      whisperedTo: whisperUsers.map(u => u.name),
+    };
+  }
+
+  /**
+   * Read chat messages in log order, after a message id or timestamp (ms since
+   * epoch). With neither, returns the most recent `limit` messages.
+   */
+  async readChatMessages(options: {
+    sinceMessageId?: string;
+    sinceTimestamp?: number;
+    limit: number;
+  }): Promise<any> {
+    this.validateFoundryState();
+
+    const all = Array.from((game.messages as any)?.contents ?? []) as any[];
+    let start = 0;
+    let selected: any[];
+    if (options.sinceMessageId) {
+      const index = all.findIndex(m => m.id === options.sinceMessageId);
+      if (index === -1) throw new Error(`Chat message not found: ${options.sinceMessageId}`);
+      start = index + 1;
+      selected = all.slice(start, start + options.limit);
+    } else if (options.sinceTimestamp !== undefined) {
+      const since = options.sinceTimestamp;
+      start = all.findIndex(m => m.timestamp > since);
+      if (start === -1) start = all.length;
+      selected = all.slice(start, start + options.limit);
+    } else {
+      start = Math.max(0, all.length - options.limit);
+      selected = all.slice(start);
+    }
+
+    const parser = new DOMParser();
+    const toText = (html: string | undefined) =>
+      html
+        ? (parser.parseFromString(html, 'text/html').body.textContent ?? '')
+            .replace(/\s+/g, ' ')
+            .trim()
+        : '';
+
+    const messages = selected.map(m => {
+      const author = m.author ?? m.user;
+      return {
+        id: m.id,
+        timestamp: m.timestamp,
+        time: new Date(m.timestamp).toISOString(),
+        speaker: m.alias ?? m.speaker?.alias ?? null,
+        actor: m.speaker?.actor ? (game.actors?.get(m.speaker.actor)?.name ?? null) : null,
+        user: author?.name ?? null,
+        userIsGM: !!author?.isGM,
+        text: toText(m.content),
+        flavor: toText(m.flavor) || undefined,
+        whisperedTo: m.whisper?.length
+          ? m.whisper.map((id: string) => game.users?.get(id)?.name ?? id)
+          : undefined,
+        rolls: m.rolls?.length
+          ? m.rolls.map((r: any) => ({
+              formula: r.formula,
+              total: r.total,
+              dice: r.dice?.map((d: any) => ({
+                faces: d.faces,
+                results: d.results
+                  ?.filter((x: any) => x.active !== false)
+                  .map((x: any) => x.result),
+              })),
+            }))
+          : undefined,
+      };
+    });
+
+    return {
+      success: true,
+      count: messages.length,
+      hasMore: start + messages.length < all.length,
+      lastMessageId: messages.length ? messages[messages.length - 1].id : null,
+      messages,
+    };
+  }
+
   // ===== PHASE 7: CHARACTER ENTITY AND TOKEN MANIPULATION METHODS =====
 
   /**

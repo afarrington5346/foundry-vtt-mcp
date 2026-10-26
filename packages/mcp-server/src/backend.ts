@@ -22,6 +22,7 @@ import { CompendiumTools } from './tools/compendium.js';
 
 import { SceneTools } from './tools/scene.js';
 import { PlaylistTools } from './tools/playlist.js';
+import { ChatTools } from './tools/chat.js';
 
 import { ActorCreationTools } from './tools/actor-creation.js';
 import { ActorManagementTools } from './tools/actor-management.js';
@@ -1195,6 +1196,8 @@ async function startBackend(): Promise<void> {
   const sceneTools = new SceneTools({ foundryClient, logger });
   const playlistTools = new PlaylistTools({ foundryClient, logger });
 
+  const chatTools = new ChatTools({ foundryClient, logger });
+
   const actorCreationTools = new ActorCreationTools({ foundryClient, logger });
   const actorManagementTools = new ActorManagementTools({ foundryClient, logger, systemRegistry });
   const effectManagementTools = new EffectManagementTools({ foundryClient, logger });
@@ -1451,6 +1454,8 @@ async function startBackend(): Promise<void> {
     ...mapGenerationTools.getToolDefinitions(),
 
     ...playlistTools.getToolDefinitions(),
+
+    ...chatTools.getToolDefinitions(),
   ];
 
   // Start Foundry connector (owns app port 31415)
@@ -1782,6 +1787,18 @@ async function startBackend(): Promise<void> {
 
                 case 'update-scene-music':
                   result = await sceneTools.handleUpdateSceneMusic(args);
+
+                  break;
+
+                // Chat tools
+
+                case 'post-chat':
+                  result = await chatTools.handlePostChat(args);
+
+                  break;
+
+                case 'read-chat':
+                  result = await chatTools.handleReadChat(args);
 
                   break;
 
