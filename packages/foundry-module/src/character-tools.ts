@@ -27,6 +27,9 @@ const STRUCTURAL_TYPES = new Set(['class', 'subclass', 'background', 'race', 'sp
 /** Item types whose value is passive (worn, carried) unless they have activities. */
 const PASSIVE_TYPES = new Set(['equipment', 'loot', 'container', 'backpack', 'tool']);
 
+/** Consumable subtypes that are used up without an activity of their own. */
+const PASSIVE_CONSUMABLES = new Set(['ammo', 'food', 'trinket']);
+
 /** Activity types that roll or apply something on their own. */
 const ACTING_ACTIVITIES = new Set([
   'attack',
@@ -98,8 +101,9 @@ export class CharacterTools {
     item: any,
     activity: any,
     actor: any
-  ): { summary: any; issues: string[] } {
+  ): { summary: any; issues: string[]; warnings: string[] } {
     const issues: string[] = [];
+    const warnings: string[] = [];
     const type = activity.type;
     const parts: any[] = activity.damage?.parts ?? [];
     const formulas = parts.map(p => p.formula ?? '').filter(Boolean);
@@ -129,7 +133,11 @@ export class CharacterTools {
       const abilities = activity.save?.ability;
       const hasAbility = abilities instanceof Set ? abilities.size > 0 : !!abilities?.length;
       if (!hasAbility) issues.push('save activity has no save ability');
-      if (!formulas.length && !effects.length) issues.push('save applies no damage and no effect');
+      if (!formulas.length && !effects.length) {
+        warnings.push(
+          'save applies no damage and no effect (fine if the result is handled by hand)'
+        );
+      }
     }
 
     // Consumption targets must point at something that exists.
@@ -154,7 +162,12 @@ export class CharacterTools {
           recovery: (activity.uses.recovery ?? []).map((r: any) => r.period),
         }
       : null;
-    if (uses && !uses.recovery.length) issues.push('activity uses never recover');
+    if (uses && !uses.recovery.length) warnings.push('activity uses never recover');
+    if (baseDamage && formulas.includes(baseDamage)) {
+      warnings.push(
+        `extra damage "${baseDamage}" repeats the base damage; if attacks roll it twice, remove the extra part`
+      );
+    }
 
     return {
       summary: {
@@ -165,13 +178,15 @@ export class CharacterTools {
             ? `${activity.attack?.type?.value ?? ''} ${activity.attack?.type?.classification ?? ''}`.trim()
             : undefined,
         save: type === 'save' ? Array.from<any>(activity.save?.ability ?? []).join('/') : undefined,
-        damage: [baseDamage, ...formulas].filter(Boolean),
+        baseDamage: baseDamage ?? undefined,
+        extraDamage: formulas.length ? formulas : undefined,
         healing: healing ?? undefined,
         effects: effects.length ? effects : undefined,
         activation: activity.activation?.type || undefined,
         uses: uses ?? undefined,
       },
       issues,
+      warnings,
     };
   }
 
@@ -288,11 +303,17 @@ export class CharacterTools {
 
     const results = Array.from<any>(actor.items).map(item => {
       const issues: string[] = [];
+      const warnings: string[] = [];
       const activities: any[] = [];
       for (const activity of item.system?.activities ?? []) {
-        const { summary, issues: activityIssues } = this.summarizeActivity(item, activity, actor);
+        const {
+          summary,
+          issues: activityIssues,
+          warnings: activityWarnings,
+        } = this.summarizeActivity(item, activity, actor);
         activities.push(summary);
         issues.push(...activityIssues.map(i => `${summary.name}: ${i}`));
+        warnings.push(...activityWarnings.map(i => `${summary.name}: ${i}`));
       }
 
       const uses = item.system?.uses;
@@ -306,7 +327,7 @@ export class CharacterTools {
           }
         : null;
       if (itemUses && !itemUses.recovery.length && item.type !== 'consumable') {
-        issues.push('has limited uses that never recover');
+        warnings.push('has limited uses that never recover (normal for charges that are used up)');
       }
 
       const passiveEffects = Array.from<any>(item.effects ?? []).filter(
@@ -318,7 +339,10 @@ export class CharacterTools {
       const flags = item.flags ?? {};
       if (flags['chris-premades']?.info) automation.push("Chris's Premades automation");
       if (flags['gambits-premades']) automation.push("Gambit's Premades automation");
-      if (flags['midi-qol']?.onUseMacroName || flags['midi-qol']?.onUseMacroParts) {
+      // Midi-QOL leaves empty on-use fields on every item; count only real macros.
+      const onUseName = String(flags['midi-qol']?.onUseMacroName ?? '').trim();
+      const onUseParts = flags['midi-qol']?.onUseMacroParts?.items ?? [];
+      if (onUseName || (Array.isArray(onUseParts) && onUseParts.some((p: any) => p?.macroName))) {
         automation.push('Midi-QOL on-use macro');
       }
       if (
@@ -358,6 +382,9 @@ export class CharacterTools {
         (item.type === 'equipment' && item.system?.armor?.value)
       ) {
         status = 'passive-item';
+      } else if (item.type === 'consumable' && PASSIVE_CONSUMABLES.has(item.system?.type?.value)) {
+        // Ammunition is spent by the weapon that fires it; food and the like are tracked by hand.
+        status = 'passive-item';
       } else if (item.type === 'weapon' || item.type === 'spell' || item.type === 'consumable') {
         status = 'broken';
         issues.push(`${item.type} has no activity, so it cannot be used`);
@@ -386,6 +413,7 @@ export class CharacterTools {
         passiveEffects: passiveEffects.length ? passiveEffects.map(e => e.name) : undefined,
         automation,
         issues: issues.length ? issues : undefined,
+        warnings: warnings.length ? warnings : undefined,
       };
     });
 
@@ -403,6 +431,7 @@ export class CharacterTools {
     );
     const counts: Record<string, number> = {};
     for (const r of results) counts[r.status] = (counts[r.status] ?? 0) + 1;
+    const withWarnings = results.filter(r => r.warnings).length;
 
     return {
       success: true,
@@ -412,8 +441,10 @@ export class CharacterTools {
       system: `${game.system.id} ${game.system.version}`,
       modules,
       autorecEntries: modules.autoanimations.active ? autorec.length : undefined,
+      itemsWithWarnings: withWarnings,
       statusKey: {
         broken: 'will not work as expected; see issues',
+        warnings: 'separate from status: worth a look, but often correct by the rules',
         'description-only':
           'text only: no activity and no effect; fine for flavour, otherwise needs automation',
         'utility-only': 'has activities but none roll an attack, save, damage or healing',

@@ -55,6 +55,7 @@ const SCHEMAS = {
     to: square.optional(),
     note: z.string().optional(),
     animate: z.boolean().optional(),
+    ignoreWalls: z.boolean().optional(),
     scene: sceneArg,
   }),
   'scene-snapshot': z.object({
@@ -177,7 +178,7 @@ export class TableTools {
       {
         name: 'token-grid',
         description:
-          "Token positions in grid terms, using the scene's own grid settings. Actions: report (each token's column/row, size and grid info), distance (between two tokens' centers, in scene units, using the scene's diagonal rule), move (a token by columns/rows, to a column/row, or to a named map note).",
+          "Token positions in grid terms, using the scene's own grid settings. Actions: report (each token's column/row, size and grid info), distance (between two tokens' centers, in scene units, using the scene's diagonal rule), move (a token by columns/rows, to a column/row, or to a named map note; reports blocked if a wall stops it).",
         inputSchema: {
           type: 'object',
           properties: {
@@ -203,6 +204,11 @@ export class TableTools {
             },
             note: { type: 'string', description: 'move: name of a map note to move to' },
             animate: { type: 'boolean', description: 'move: animate (default true)' },
+            ignoreWalls: {
+              type: 'boolean',
+              description:
+                'move: place the token even if walls are in the way (GM teleport). Without it, a move that walls stop returns blocked: true.',
+            },
             scene: SCENE_PROPERTY,
           },
           required: ['action'],
@@ -288,7 +294,7 @@ export class TableTools {
       {
         name: 'move-party',
         description:
-          "Place the player characters' tokens on a scene around a named map note or grid square, moving their existing tokens there or creating tokens if they have none on it. Defaults to every character assigned to a player. Optionally activate the scene afterwards (players are moved to it only then).",
+          "Place the player characters' tokens on a scene around a named map note or grid square, moving their existing tokens there (past walls, and made visible) or creating tokens if they have none on it. Defaults to every character assigned to a player. Optionally activate the scene afterwards (players are moved to it only then).",
         inputSchema: {
           type: 'object',
           properties: {

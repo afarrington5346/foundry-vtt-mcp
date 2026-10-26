@@ -383,6 +383,7 @@ export class TableTools {
     to?: { column: number; row: number };
     note?: string;
     animate?: boolean;
+    ignoreWalls?: boolean;
   }): Promise<any> {
     const scene = this.scene(options.sceneId);
     const grid = this.gridInfo(scene);
@@ -453,17 +454,51 @@ export class TableTools {
       ) {
         throw new Error('That square is outside the scene map');
       }
-      await token.update(target, { animate: options.animate !== false });
-      return {
-        success: true,
-        scene: scene.name,
-        grid,
-        before,
-        after: this.tokenGridInfo(scene, token),
-      };
+      const reached = await this.placeToken(token, target, {
+        animate: options.animate !== false,
+        ignoreWalls: !!options.ignoreWalls,
+      });
+      const after = this.tokenGridInfo(scene, token);
+      if (!reached) {
+        return {
+          success: false,
+          blocked: true,
+          scene: scene.name,
+          grid,
+          before,
+          after,
+          target: { square: this.square(scene, target), position: target },
+          message:
+            'Foundry stopped the move at a wall, so the token did not reach the target. Use ignoreWalls to place it there anyway.',
+        };
+      }
+      return { success: true, scene: scene.name, grid, before, after };
     }
 
     throw new Error(`Unknown token-grid action: ${String(options.action)}`);
+  }
+
+  /**
+   * Move a token to a top-left position. Foundry v13 runs position updates
+   * through wall-constrained movement, so check where it ended up. With
+   * ignoreWalls the token is displaced (teleported) instead.
+   */
+  private async placeToken(
+    token: any,
+    target: { x: number; y: number },
+    options: { animate: boolean; ignoreWalls: boolean }
+  ): Promise<boolean> {
+    if (options.ignoreWalls) {
+      try {
+        if (typeof token.move !== 'function') throw new Error('no TokenDocument#move');
+        await token.move([{ x: target.x, y: target.y, action: 'displace' }], { animate: false });
+      } catch {
+        await token.update(target, { animate: false, teleport: true });
+      }
+    } else {
+      await token.update(target, { animate: options.animate });
+    }
+    return token.x === target.x && token.y === target.y;
   }
 
   // ===== scene-snapshot =====
@@ -486,72 +521,108 @@ export class TableTools {
     }
 
     const controlled: string[] = c.tokens.controlled.map((t: any) => t.id);
-    const markers = new PIXI.Container();
     try {
       c.tokens.releaseAll();
       const rect = c.dimensions.sceneRect;
-      const [sw, sh] = c.screenDimensions;
-      const scale = Math.min(sw / rect.width, sh / rect.height) * 0.98;
-      c.pan({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, scale });
+      const renderer = c.app.renderer;
+      const res = renderer.resolution ?? 1;
 
+      // Output pixels per scene pixel. The browser window is usually smaller than
+      // that, so the scene is rendered at this zoom in screen-sized tiles.
+      const k = Math.min(1, maxSize / Math.max(rect.width, rect.height));
+      const width = Math.max(1, Math.round(rect.width * k));
+      const height = Math.max(1, Math.round(rect.height * k));
+      const out = document.createElement('canvas');
+      out.width = width;
+      out.height = height;
+      const ctx = out.getContext('2d');
+      if (!ctx) throw new Error('Could not create a 2D canvas');
+      ctx.imageSmoothingQuality = 'high';
+
+      const [sw, sh] = c.screenDimensions;
+      const zoom = k / res;
+      c.pan({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, scale: zoom });
+      await settle(150);
+      // Foundry may clamp the zoom; size tiles from the zoom it actually applied.
+      const applied = c.stage.scale.x;
+      const tileW = Math.max(50, Math.floor((sw * 0.9) / applied));
+      const tileH = Math.max(50, Math.floor((sh * 0.9) / applied));
+      let tiles = 0;
+      for (let ty = rect.y; ty < rect.y + rect.height; ty += tileH) {
+        for (let tx = rect.x; tx < rect.x + rect.width; tx += tileW) {
+          const tw = Math.min(tileW, rect.x + rect.width - tx);
+          const th = Math.min(tileH, rect.y + rect.height - ty);
+          c.pan({ x: tx + tw / 2, y: ty + th / 2, scale: zoom });
+          await settle(150);
+          await settle(100);
+          renderer.render(c.app.stage);
+          const frame: HTMLCanvasElement = renderer.extract.canvas();
+          const wt = c.stage.worldTransform;
+          const a = wt.apply(new PIXI.Point(tx, ty));
+          const b = wt.apply(new PIXI.Point(tx + tw, ty + th));
+          const sx = Math.max(0, a.x * res);
+          const sy = Math.max(0, a.y * res);
+          const ex = Math.min(frame.width, b.x * res);
+          const ey = Math.min(frame.height, b.y * res);
+          if (ex <= sx || ey <= sy) continue;
+          // Map whatever part of the tile is on screen back to scene space.
+          const wx0 = tx + ((sx - a.x * res) / ((b.x - a.x) * res)) * tw;
+          const wy0 = ty + ((sy - a.y * res) / ((b.y - a.y) * res)) * th;
+          const wx1 = tx + ((ex - a.x * res) / ((b.x - a.x) * res)) * tw;
+          const wy1 = ty + ((ey - a.y * res) / ((b.y - a.y) * res)) * th;
+          ctx.drawImage(
+            frame,
+            sx,
+            sy,
+            ex - sx,
+            ey - sy,
+            (wx0 - rect.x) * k,
+            (wy0 - rect.y) * k,
+            (wx1 - wx0) * k,
+            (wy1 - wy0) * k
+          );
+          tiles++;
+        }
+      }
+      if (!tiles) throw new Error('Scene is not on screen; could not capture it');
+
+      // Mark hidden tokens on the finished image, so it doesn't depend on canvas layers.
       const hiddenTokens: string[] = [];
       for (const t of c.tokens.placeables) {
         if (!t.document.hidden) continue;
         hiddenTokens.push(t.document.name);
-        const line = Math.max(3, 4 / scale);
-        const box = new PIXI.Graphics();
-        box.lineStyle(line, 0xff1744, 1);
-        box.beginFill(0xff1744, 0.18);
-        box.drawRect(t.x, t.y, t.w, t.h);
-        box.endFill();
-        const label = new PIXI.Text('HIDDEN', {
-          fontFamily: 'Arial',
-          fontWeight: 'bold',
-          fontSize: Math.max(14, 15 / scale),
-          fill: 0xffffff,
-          stroke: 0xb00020,
-          strokeThickness: Math.max(3, 4 / scale),
-        } as any);
-        label.anchor.set(0.5, 0);
-        label.position.set(t.x + t.w / 2, t.y + line);
-        markers.addChild(box, label);
+        const x = (t.document.x - rect.x) * k;
+        const y = (t.document.y - rect.y) * k;
+        const w = t.w * k;
+        const h = t.h * k;
+        const line = Math.max(2, Math.round(Math.min(w, h) * 0.06));
+        ctx.fillStyle = 'rgba(255, 23, 68, 0.18)';
+        ctx.fillRect(x, y, w, h);
+        ctx.strokeStyle = '#ff1744';
+        ctx.lineWidth = line;
+        ctx.strokeRect(x + line / 2, y + line / 2, w - line, h - line);
+        const font = Math.max(10, Math.min(18, Math.round(w * 0.3)));
+        ctx.font = `bold ${font}px Arial, sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'bottom';
+        const labelY = y > font + 4 ? y - 2 : y + h + font + 2;
+        const tw = ctx.measureText('HIDDEN').width;
+        ctx.fillStyle = '#b00020';
+        ctx.fillRect(x + w / 2 - tw / 2 - 3, labelY - font - 1, tw + 6, font + 3);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText('HIDDEN', x + w / 2, labelY + 1);
       }
-      c.interface.addChild(markers);
-      await settle(150);
-      await settle(150);
 
-      const renderer = c.app.renderer;
-      renderer.render(c.app.stage);
-      const full: HTMLCanvasElement = renderer.extract.canvas();
-      const res = renderer.resolution ?? 1;
-      const wt = c.stage.worldTransform;
-      const tl = wt.apply(new PIXI.Point(rect.x, rect.y));
-      const br = wt.apply(new PIXI.Point(rect.x + rect.width, rect.y + rect.height));
-      const sx = Math.max(0, Math.floor(tl.x * res));
-      const sy = Math.max(0, Math.floor(tl.y * res));
-      const cw = Math.min(full.width, Math.ceil(br.x * res)) - sx;
-      const ch = Math.min(full.height, Math.ceil(br.y * res)) - sy;
-      if (cw <= 0 || ch <= 0) throw new Error('Scene is not on screen; could not capture it');
-
-      let size = maxSize;
-      let dataUrl = '';
-      let width = 0;
-      let height = 0;
       // Keep the PNG under ~4.5 MB of base64 so MCP clients accept it.
-      for (let attempt = 0; attempt < 6; attempt++) {
-        const k = Math.min(1, size / Math.max(cw, ch));
-        width = Math.round(cw * k);
-        height = Math.round(ch * k);
-        const out = document.createElement('canvas');
-        out.width = width;
-        out.height = height;
-        const ctx = out.getContext('2d');
-        if (!ctx) throw new Error('Could not create a 2D canvas');
-        ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(full, sx, sy, cw, ch, 0, 0, width, height);
-        dataUrl = out.toDataURL('image/png');
-        if (dataUrl.length < 4_500_000) break;
-        size = Math.round(Math.max(width, height) * 0.8);
+      let image = out;
+      let dataUrl = image.toDataURL('image/png');
+      for (let attempt = 0; attempt < 5 && dataUrl.length >= 4_500_000; attempt++) {
+        const smaller = document.createElement('canvas');
+        smaller.width = Math.round(image.width * 0.8);
+        smaller.height = Math.round(image.height * 0.8);
+        smaller.getContext('2d')?.drawImage(image, 0, 0, smaller.width, smaller.height);
+        image = smaller;
+        dataUrl = image.toDataURL('image/png');
       }
 
       return {
@@ -559,8 +630,9 @@ export class TableTools {
         scene: scene.name,
         sceneId: scene.id,
         active: scene.active,
-        width,
-        height,
+        width: image.width,
+        height: image.height,
+        tiles,
         hiddenTokens,
         note: hiddenTokens.length
           ? 'Hidden tokens are outlined in red and labelled HIDDEN.'
@@ -568,7 +640,6 @@ export class TableTools {
         __image: { data: dataUrl.slice(dataUrl.indexOf(',') + 1), mimeType: 'image/png' },
       };
     } finally {
-      markers.destroy({ children: true });
       if (switched && originalScene) {
         await originalScene.view();
       } else {
@@ -788,8 +859,23 @@ export class TableTools {
         t => t.actorLink && t.actorId === actor.id
       );
       if (existing) {
-        await existing.update(position, { animate: false });
-        placed.push({ actor: actor.name, tokenId: existing.id, created: false, square: sq });
+        // The party arrives from elsewhere: teleport past walls, and make sure players can see it.
+        const wasHidden = existing.hidden;
+        if (wasHidden) await existing.update({ hidden: false });
+        const reached = await this.placeToken(existing, position, {
+          animate: false,
+          ignoreWalls: true,
+        });
+        placed.push({
+          actor: actor.name,
+          tokenId: existing.id,
+          created: false,
+          square: sq,
+          ...(wasHidden ? { unhidden: true } : {}),
+          ...(reached
+            ? {}
+            : { warning: 'did not reach the square', square: this.square(scene, existing) }),
+        });
       } else {
         const tokenDoc = await actor.getTokenDocument({ ...position, hidden: false });
         const [created] = await scene.createEmbeddedDocuments('Token', [tokenDoc.toObject()]);
