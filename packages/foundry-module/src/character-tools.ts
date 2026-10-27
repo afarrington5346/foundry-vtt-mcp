@@ -111,6 +111,14 @@ export class CharacterTools {
       type === 'attack' && activity.damage?.includeBase && item.system?.damage?.base?.formula
         ? item.system.damage.base.formula
         : null;
+    // dnd5e prepares attack parts with the weapon's base damage already added, so
+    // the extra parts are only the ones saved on the activity (the last N prepared).
+    const stored =
+      item._source?.system?.activities?.[activity.id]?.damage?.parts ??
+      activity._source?.damage?.parts;
+    const extraFormulas = Array.isArray(stored)
+      ? formulas.slice(Math.max(0, formulas.length - stored.length))
+      : formulas;
     const healing = type === 'heal' ? activity.healing?.formula || null : null;
     const effects = (activity.effects ?? [])
       .map((e: any) => e.effect?.name ?? e._id)
@@ -163,7 +171,7 @@ export class CharacterTools {
         }
       : null;
     if (uses && !uses.recovery.length) warnings.push('activity uses never recover');
-    if (baseDamage && formulas.includes(baseDamage)) {
+    if (baseDamage && extraFormulas.includes(baseDamage)) {
       warnings.push(
         `extra damage "${baseDamage}" repeats the base damage; if attacks roll it twice, remove the extra part`
       );
@@ -179,7 +187,7 @@ export class CharacterTools {
             : undefined,
         save: type === 'save' ? Array.from<any>(activity.save?.ability ?? []).join('/') : undefined,
         baseDamage: baseDamage ?? undefined,
-        extraDamage: formulas.length ? formulas : undefined,
+        extraDamage: extraFormulas.length ? extraFormulas : undefined,
         healing: healing ?? undefined,
         effects: effects.length ? effects : undefined,
         activation: activity.activation?.type || undefined,

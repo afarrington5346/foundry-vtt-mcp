@@ -208,7 +208,11 @@ export class TableTools {
               description: 'move: target square',
             },
             note: { type: 'string', description: 'move: name of a map note to move to' },
-            animate: { type: 'boolean', description: 'move: animate (default true)' },
+            animate: {
+              type: 'boolean',
+              description:
+                'move: animate (default false; Foundry v13 sometimes drops animated moves, which are then redone without animation)',
+            },
             ignoreWalls: {
               type: 'boolean',
               description:

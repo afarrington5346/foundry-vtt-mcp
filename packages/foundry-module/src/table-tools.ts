@@ -454,11 +454,14 @@ export class TableTools {
       ) {
         throw new Error('That square is outside the scene map');
       }
-      const reached = await this.placeToken(token, target, {
-        animate: options.animate !== false,
+      const { reached, moved, animationFailed } = await this.placeToken(token, target, {
+        animate: options.animate === true,
         ignoreWalls: !!options.ignoreWalls,
       });
       const after = this.tokenGridInfo(scene, token);
+      const notes = animationFailed
+        ? { note: 'Foundry dropped the animated move, so it was redone without animation.' }
+        : {};
       if (!reached) {
         return {
           success: false,
@@ -467,12 +470,14 @@ export class TableTools {
           grid,
           before,
           after,
-          target: { square: this.square(scene, target), position: target },
-          message:
-            'Foundry stopped the move at a wall, so the token did not reach the target. Use ignoreWalls to place it there anyway.',
+          target: { square: this.square(scene, target), position: { x: target.x, y: target.y } },
+          message: moved
+            ? 'A wall stopped the token partway; it is now at the "after" position. Use ignoreWalls to place it on the target anyway.'
+            : 'Foundry did not move the token (a wall right next to it, or the move was refused). Use ignoreWalls to place it on the target anyway.',
+          ...notes,
         };
       }
-      return { success: true, scene: scene.name, grid, before, after };
+      return { success: true, scene: scene.name, grid, before, after, ...notes };
     }
 
     throw new Error(`Unknown token-grid action: ${String(options.action)}`);
@@ -487,18 +492,31 @@ export class TableTools {
     token: any,
     target: { x: number; y: number },
     options: { animate: boolean; ignoreWalls: boolean }
-  ): Promise<boolean> {
+  ): Promise<{ reached: boolean; moved: boolean; animationFailed: boolean }> {
+    // Foundry rewrites the update data it is given (e.g. to where a wall stopped
+    // the move), so always pass copies and compare against the original target.
+    const start = { x: token.x, y: token.y };
+    let animationFailed = false;
     if (options.ignoreWalls) {
       try {
         if (typeof token.move !== 'function') throw new Error('no TokenDocument#move');
         await token.move([{ x: target.x, y: target.y, action: 'displace' }], { animate: false });
       } catch {
-        await token.update(target, { animate: false, teleport: true });
+        await token.update({ x: target.x, y: target.y }, { animate: false, teleport: true });
       }
     } else {
-      await token.update(target, { animate: options.animate });
+      await token.update({ x: target.x, y: target.y }, { animate: options.animate });
+      // In v13 an animated update can be dropped entirely; retry it without animation.
+      if (options.animate && token.x === start.x && token.y === start.y) {
+        animationFailed = true;
+        await token.update({ x: target.x, y: target.y }, { animate: false });
+      }
     }
-    return token.x === target.x && token.y === target.y;
+    return {
+      reached: token.x === target.x && token.y === target.y,
+      moved: token.x !== start.x || token.y !== start.y,
+      animationFailed,
+    };
   }
 
   // ===== scene-snapshot =====
@@ -862,7 +880,7 @@ export class TableTools {
         // The party arrives from elsewhere: teleport past walls, and make sure players can see it.
         const wasHidden = existing.hidden;
         if (wasHidden) await existing.update({ hidden: false });
-        const reached = await this.placeToken(existing, position, {
+        const { reached } = await this.placeToken(existing, position, {
           animate: false,
           ignoreWalls: true,
         });
