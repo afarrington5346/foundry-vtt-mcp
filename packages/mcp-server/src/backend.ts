@@ -1489,6 +1489,13 @@ async function startBackend(): Promise<void> {
   const server = net.createServer(socket => {
     socket.setEncoding('utf8');
 
+    // A client that drops its connection (ECONNRESET), or a reply written after it
+    // has gone (EPIPE), emits 'error' on this socket. Unhandled, that kills the backend.
+    socket.on('error', err => {
+      logger.warn('Control client connection error', { error: err.message });
+      socket.destroy();
+    });
+
     let buffer = '';
 
     socket.on('data', async (chunk: string) => {
