@@ -29,10 +29,20 @@ export class WebRTCConnection {
   private dataChannel: RTCDataChannel | null = null;
   private connectionState: string = CONNECTION_STATES.DISCONNECTED;
   private messageHandler: ((message: any) => Promise<void>) | null = null;
+  private disconnectHandler: ((reason: string) => void) | null = null;
+  private lossReported = false;
+  private closedByUs = false;
 
   constructor(private config: WebRTCConfig) {}
 
-  async connect(onMessage: (message: any) => Promise<void>): Promise<void> {
+  /**
+   * @param onDisconnect Called once if the connection is lost after connect() (the
+   *   server went away, ICE failed). Not called for disconnect().
+   */
+  async connect(
+    onMessage: (message: any) => Promise<void>,
+    onDisconnect?: (reason: string) => void
+  ): Promise<void> {
     if (
       this.connectionState === CONNECTION_STATES.CONNECTED ||
       this.connectionState === CONNECTION_STATES.CONNECTING
@@ -42,6 +52,7 @@ export class WebRTCConnection {
 
     this.connectionState = CONNECTION_STATES.CONNECTING;
     this.messageHandler = onMessage;
+    this.disconnectHandler = onDisconnect ?? null;
     this.log('Starting WebRTC connection...');
 
     try {
@@ -93,6 +104,7 @@ export class WebRTCConnection {
     this.dataChannel.onclose = () => {
       this.log('WebRTC data channel closed');
       this.connectionState = CONNECTION_STATES.DISCONNECTED;
+      this.reportLoss('data channel closed');
     };
 
     this.dataChannel.onerror = error => {
@@ -121,12 +133,26 @@ export class WebRTCConnection {
       if (state === 'failed' || state === 'disconnected' || state === 'closed') {
         this.connectionState = CONNECTION_STATES.DISCONNECTED;
       }
+      // 'disconnected' can recover on its own; 'failed' and 'closed' cannot.
+      if (state === 'failed' || state === 'closed') this.reportLoss(`ICE ${state}`);
     };
 
     this.peerConnection.onconnectionstatechange = () => {
       const state = this.peerConnection?.connectionState;
       this.log(`Peer connection state: ${state}`);
+      if (state === 'failed' || state === 'closed') this.reportLoss(`peer connection ${state}`);
     };
+  }
+
+  /**
+   * Tell the owner the connection is gone, once, unless we closed it ourselves.
+   * Without this the owner kept believing it was connected after the MCP server
+   * restarted, and never reconnected until the GM reloaded Foundry.
+   */
+  private reportLoss(reason: string): void {
+    if (this.closedByUs || this.lossReported || !this.disconnectHandler) return;
+    this.lossReported = true;
+    this.disconnectHandler(reason);
   }
 
   private async waitForIceGathering(): Promise<void> {
@@ -193,6 +219,8 @@ export class WebRTCConnection {
   }
 
   disconnect(): void {
+    this.closedByUs = true;
+
     if (this.dataChannel) {
       this.dataChannel.close();
       this.dataChannel = null;

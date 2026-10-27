@@ -24,6 +24,8 @@ export class SocketBridge {
   private maxReconnectAttempts = 5;
   private reconnectTimer: any = null;
   private activeConnectionType: 'websocket' | 'webrtc' | null = null;
+  // Set by disconnect(); the only thing that stops reconnecting.
+  private stopped = false;
 
   constructor(private config: BridgeConfig) {
     this.maxReconnectAttempts = config.reconnectAttempts;
@@ -36,6 +38,8 @@ export class SocketBridge {
     ) {
       return;
     }
+
+    this.stopped = false;
 
     this.connectionState = CONNECTION_STATES.CONNECTING;
     this.log('Connecting to MCP server...');
@@ -79,19 +83,36 @@ export class SocketBridge {
       debugLogging: this.config.debugLogging,
     };
 
-    this.webrtc = new WebRTCConnection(webrtcConfig);
+    const webrtc = new WebRTCConnection(webrtcConfig);
+    this.webrtc = webrtc;
 
     try {
-      await this.webrtc.connect(this.handleMessage.bind(this));
+      await webrtc.connect(this.handleMessage.bind(this), reason =>
+        this.handleWebRTCLost(webrtc, reason)
+      );
       this.connectionState = CONNECTION_STATES.CONNECTED;
       this.reconnectAttempts = 0;
       this.log('Connected via WebRTC');
     } catch (error) {
       this.log(`WebRTC connection failed: ${error}`);
+      webrtc.disconnect();
+      if (this.webrtc === webrtc) this.webrtc = null;
       this.connectionState = CONNECTION_STATES.DISCONNECTED;
       this.scheduleReconnect();
       throw error;
     }
+  }
+
+  private handleWebRTCLost(webrtc: WebRTCConnection, reason: string): void {
+    // Ignore a stale connection that has already been replaced
+    if (this.stopped || this.webrtc !== webrtc) return;
+
+    this.log(`WebRTC connection lost (${reason}); reconnecting`);
+    webrtc.disconnect();
+    this.webrtc = null;
+    this.connectionState = CONNECTION_STATES.DISCONNECTED;
+    this.reconnectAttempts = 0;
+    this.scheduleReconnect();
   }
 
   private async connectWebSocket(): Promise<void> {
@@ -153,8 +174,9 @@ export class SocketBridge {
           this.log(`Disconnected: ${event.reason || 'Connection closed'}`);
           this.connectionState = CONNECTION_STATES.DISCONNECTED;
 
-          if (event.wasClean) {
-            // Clean disconnect, don't reconnect
+          // Only our own disconnect() should stop reconnecting; a server that shuts
+          // down cleanly will usually come back.
+          if (this.stopped) {
             return;
           }
 
@@ -170,6 +192,8 @@ export class SocketBridge {
   }
 
   disconnect(): void {
+    this.stopped = true;
+
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -503,9 +527,13 @@ export class SocketBridge {
   }
 
   private scheduleReconnect(): void {
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      this.log(`Max reconnection attempts reached (${this.maxReconnectAttempts})`);
-      return;
+    if (this.stopped) return;
+
+    // Never give up: the MCP server restarts whenever Claude Desktop does, and a
+    // bridge that stopped retrying needed a manual Foundry reload to come back.
+    // After the fast attempts, keep trying at the 30 s cap.
+    if (this.reconnectAttempts === this.maxReconnectAttempts) {
+      this.log(`${this.maxReconnectAttempts} reconnection attempts failed; retrying every 30s`);
     }
 
     if (this.reconnectTimer) {

@@ -1,4 +1,4 @@
-import { MODULE_ID } from './constants.js';
+import { MODULE_ID, CONNECTION_STATES } from './constants.js';
 import { SocketBridge } from './socket-bridge.js';
 import { QueryHandlers } from './queries.js';
 import { ModuleSettings } from './settings.js';
@@ -185,7 +185,9 @@ class FoundryMCPBridge {
         throw new Error(`Invalid configuration: ${validation.errors.join(', ')}`);
       }
 
-      // Create and connect socket bridge
+      // Create and connect socket bridge. A previous bridge may still be retrying in
+      // the background (it never gives up), so stop it rather than run two.
+      this.socketBridge?.disconnect();
       this.socketBridge = new SocketBridge(config);
       await this.socketBridge.connect();
 
@@ -353,6 +355,13 @@ class FoundryMCPBridge {
     try {
       // Lightweight connection check - just verify socket state
       if (!this.socketBridge || !this.socketBridge.isConnected()) {
+        // The socket bridge retries on its own; restarting it here would throw that
+        // away and, on failure, switch auto-reconnect off for good.
+        const state = this.socketBridge?.getConnectionState();
+        if (state === CONNECTION_STATES.RECONNECTING || state === CONNECTION_STATES.CONNECTING) {
+          return;
+        }
+
         // Only log once per disconnection to avoid spam
         if (this.lastActivity && new Date().getTime() - this.lastActivity.getTime() > 60000) {
           console.warn(`[${MODULE_ID}] Heartbeat: Connection lost`);
