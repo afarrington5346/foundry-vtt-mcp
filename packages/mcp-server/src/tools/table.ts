@@ -48,7 +48,7 @@ const SCHEMAS = {
     scene: sceneArg,
   }),
   'token-grid': z.object({
-    action: z.enum(['report', 'distance', 'move']),
+    action: z.enum(['report', 'distance', 'sight', 'move']),
     tokenIds: z.array(z.string().min(1)).optional(),
     fromTokenId: z.string().optional(),
     toTokenId: z.string().optional(),
@@ -198,18 +198,18 @@ export class TableTools {
       {
         name: 'token-grid',
         description:
-          "Token positions in grid terms, using the scene's own grid settings. Actions: report (each token's column/row, size and grid info), distance (between two tokens' centers, in scene units, using the scene's diagonal rule), move (a token by columns/rows, to a column/row, to a named map note, or toward another token). For a creature's move use ONE call with toward (or to) + maxDistance (its speed): it routes around walls and closed doors and past enemies, stops at its speed, and reports whose reach it entered or left (reach[].events, e.g. \"entered 10 ft\") for Reactive Strike and opportunity attacks.",
+          "Token positions in grid terms, using the scene's own grid settings. Actions: report (each token's column/row, size and grid info), distance (between two tokens' centers, in scene units, using the scene's diagonal rule), sight (fromTokenId → toTokenId: lineOfSight, whether a wall blocks movement, and meleeReach; check it before every attack, since nothing can be attacked through a wall), move (a token by columns/rows, to a column/row, to a named map note, or toward another token). For a creature's move use ONE call with toward (or to) + maxDistance (its speed): it routes around walls and closed doors and past enemies, ends within stopWithin of the target with no wall between them, stops at its speed, and reports whose reach it entered or left (reach[].events, e.g. \"entered 10 ft\"; a creature behind a wall is never in reach). If the target can't be reached it moves as close as it can (closestReachable: true).",
         inputSchema: {
           type: 'object',
           properties: {
-            action: { type: 'string', enum: ['report', 'distance', 'move'] },
+            action: { type: 'string', enum: ['report', 'distance', 'sight', 'move'] },
             tokenIds: {
               type: 'array',
               items: { type: 'string' },
               description: 'report: limit to these tokens',
             },
-            fromTokenId: { type: 'string', description: 'distance: first token' },
-            toTokenId: { type: 'string', description: 'distance: second token' },
+            fromTokenId: { type: 'string', description: 'distance/sight: first token (sight: the one looking or attacking)' },
+            toTokenId: { type: 'string', description: 'distance/sight: second token' },
             tokenId: { type: 'string', description: 'move: token to move' },
             by: {
               type: 'object',

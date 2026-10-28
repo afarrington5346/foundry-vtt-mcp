@@ -26,6 +26,11 @@ export interface PathOptions {
   canEnd: (cell: Cell) => boolean;
   /** Cost of a diagonal step relative to an orthogonal one (1 under the 2024 5-foot rule) */
   diagonalCost?: number;
+  /**
+   * Optional: if no goal is reachable, return the route to the reachable cell with the
+   * lowest score instead of null (e.g. distance to the target: "get as close as you can")
+   */
+  score?: (cell: Cell) => number;
 }
 
 export interface PathResult {
@@ -33,6 +38,8 @@ export interface PathResult {
   path: Cell[];
   /** Movement cost of each cell from the start, in steps */
   costs: number[];
+  /** True when no goal was reachable and this is the closest reachable cell */
+  fallback?: boolean;
 }
 
 const key = (c: Cell) => `${c.column},${c.row}`;
@@ -54,6 +61,18 @@ export function findPath(o: PathOptions): PathResult | null {
   const prev = new Map<string, Cell>();
   const open: Cell[] = [o.start];
   const done = new Set<string>();
+  // With o.score: the reachable cell with the lowest score (e.g. distance to the target),
+  // used when no goal can be reached at all
+  let fallback: { cell: Cell; score: number } | null = null;
+  const route = (cell: Cell, isFallback: boolean): PathResult => {
+    const path: Cell[] = [cell];
+    for (let c = prev.get(key(cell)); c; c = prev.get(key(c))) path.unshift(c);
+    return {
+      path,
+      costs: path.map(c => dist.get(key(c))!),
+      ...(isFallback ? { fallback: true } : {}),
+    };
+  };
 
   while (open.length) {
     // Grids here are a few hundred cells: a linear scan beats a heap for clarity
@@ -66,10 +85,12 @@ export function findPath(o: PathOptions): PathResult | null {
     if (done.has(k)) continue;
     done.add(k);
 
-    if (o.isGoal(cell) && (o.canEnd(cell) || k === key(o.start))) {
-      const path: Cell[] = [cell];
-      for (let c = prev.get(k); c; c = prev.get(key(c))) path.unshift(c);
-      return { path, costs: path.map(c => dist.get(key(c))!) };
+    const canStop = o.canEnd(cell) || k === key(o.start);
+    if (o.isGoal(cell) && canStop) return route(cell, false);
+    if (o.score && canStop) {
+      const s = o.score(cell);
+      // Cells are settled cheapest-first, so on a tie the nearer one is kept
+      if (!fallback || s < fallback.score) fallback = { cell, score: s };
     }
 
     for (const [dc, dr] of STEPS) {
@@ -94,7 +115,7 @@ export function findPath(o: PathOptions): PathResult | null {
       }
     }
   }
-  return null;
+  return fallback ? route(fallback.cell, true) : null;
 }
 
 /**

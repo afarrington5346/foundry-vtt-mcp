@@ -106,6 +106,55 @@ describe('findPath', () => {
   });
 });
 
+describe('closest-reachable fallback (score)', () => {
+  it('moves as close as it can when walls cut it off from the target', () => {
+    // Wall between columns 2 and 3 along every row: column 4 can't be reached
+    const target = { column: 4, row: 2 };
+    const dist = (c: Cell) =>
+      Math.max(Math.abs(c.column - target.column), Math.abs(c.row - target.row));
+    const r = findPath({
+      ...open,
+      blocked: verticalWall(3, 0, 9),
+      start: { column: 0, row: 0 },
+      columns: 6,
+      rows: 5,
+      isGoal: c => dist(c) <= 1,
+      score: dist,
+    })!;
+    expect(r.fallback).toBe(true);
+    // Right up against the wall: every column-2 square is equally close under the 5-ft diagonal
+    // rule, and the cheapest one to reach wins the tie
+    expect(r.path.at(-1)!.column).toBe(2);
+    expect(dist(r.path.at(-1)!)).toBe(2);
+    expect(r.costs.at(-1)).toBe(2);
+  });
+
+  it('still prefers a real goal when one is reachable', () => {
+    const r = findPath({
+      ...open,
+      start: { column: 0, row: 0 },
+      columns: 6,
+      rows: 1,
+      isGoal: c => c.column === 3,
+      score: c => Math.abs(c.column - 5),
+    })!;
+    expect(r.fallback).toBeUndefined();
+    expect(r.path.at(-1)).toEqual({ column: 3, row: 0 });
+  });
+
+  it('without score, an unreachable goal is still null', () => {
+    const r = findPath({
+      ...open,
+      blocked: verticalWall(3, 0, 9),
+      start: { column: 0, row: 0 },
+      columns: 6,
+      rows: 5,
+      isGoal: c => c.column === 4,
+    });
+    expect(r).toBeNull();
+  });
+});
+
 describe('truncatePath', () => {
   it('stops at the speed limit, on a cell it may end in', () => {
     const r = findPath({

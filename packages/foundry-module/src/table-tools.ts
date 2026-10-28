@@ -407,7 +407,7 @@ export class TableTools {
   }
 
   async tokenGrid(options: {
-    action: 'report' | 'distance' | 'move';
+    action: 'report' | 'distance' | 'sight' | 'move';
     sceneId?: string;
     tokenIds?: string[];
     fromTokenId?: string;
@@ -443,6 +443,35 @@ export class TableTools {
         scene: scene.name,
         grid,
         tokens: tokens.map(t => this.tokenGridInfo(scene, t)),
+      };
+    }
+
+    if (options.action === 'sight') {
+      // Line of sight and reach between two tokens: before any attack, and to check
+      // whether a PC can see a creature at all (walls block sight; light is separate)
+      if (!options.fromTokenId || !options.toTokenId) {
+        throw new Error('sight needs fromTokenId and toTokenId');
+      }
+      const a = this.token(scene, options.fromTokenId);
+      const b = this.token(scene, options.toTokenId);
+      const ca = this.tokenCenter(scene, a);
+      const cb = this.tokenCenter(scene, b);
+      const distance = this.distance(scene, ca, cb);
+      const sightBlocked = this.wallBetween(ca, cb, 'sight');
+      const moveBlocked = this.wallBetween(ca, cb, 'move');
+      return {
+        success: true,
+        scene: scene.name,
+        from: this.tokenGridInfo(scene, a),
+        to: this.tokenGridInfo(scene, b),
+        distance,
+        units: grid.units,
+        lineOfSight: !sightBlocked,
+        wallBlocksMovement: moveBlocked,
+        meleeReach: moveBlocked ? 'none (wall between)' : distance <= grid.distance ? 'adjacent' : distance <= grid.distance * 2 ? 'within 10 (reach weapons)' : 'out of reach',
+        note: sightBlocked
+          ? 'A wall blocks sight: no ranged attack or spell needing sight, and the PC cannot see this token.'
+          : 'Clear line. Whether a PC actually sees it also depends on light (get-current-scene lighting, token light, darkvision).',
       };
     }
 
@@ -581,21 +610,25 @@ export class TableTools {
       }
     }
 
-    const backend = (CONFIG as any).Canvas?.polygonBackends?.move;
-    const blocked = (a: Cell, b: Cell) =>
-      !!backend?.testCollision(center(toAbs(a)), center(toAbs(b)), { type: 'move', mode: 'any' });
+    const blocked = (a: Cell, b: Cell) => this.wallBetween(center(toAbs(a)), center(toAbs(b)), 'move');
+
+    // Reach between two absolute cells: in range AND no wall between them. Distance alone
+    // let monsters "reach" a PC through a wall (S04: every enemy fought Aldren through one).
+    const reachDistance = (from: Cell, to: Cell) =>
+      this.wallBetween(center(from), center(to), 'move')
+        ? Infinity
+        : this.distance(scene, center(from), center(to));
 
     // Destination
     let isGoal: (c: Cell) => boolean;
+    let score: (c: Cell) => number;
     let target: any = null;
     const stopWithin = options.stopWithin ?? unit;
     if (options.toward) {
       target = this.token(scene, options.toward);
       const targetCells = footprint(target);
-      isGoal = c => {
-        const p = center(toAbs(c));
-        return targetCells.some(t => this.distance(scene, p, center(t)) <= stopWithin + 1e-6);
-      };
+      isGoal = c => targetCells.some(t => reachDistance(toAbs(c), t) <= stopWithin + 1e-6);
+      score = c => Math.min(...targetCells.map(t => this.distance(scene, center(toAbs(c)), center(t))));
     } else {
       let goal: Cell;
       if (options.note) {
@@ -610,6 +643,7 @@ export class TableTools {
       }
       const goalKey = cellKey(toLocal(goal));
       isGoal = c => cellKey(c) === goalKey;
+      score = c => this.distance(scene, center(toAbs(c)), center(goal));
     }
 
     const diagonals = (CONST as any).GRID_DIAGONALS ?? {};
@@ -627,22 +661,24 @@ export class TableTools {
       passable: c => !hostileTo.has(cellKey(toAbs(c))),
       canEnd: c => !occupied.has(cellKey(toAbs(c))),
       diagonalCost,
+      score,
     });
-    if (!found) {
+    if (!found || found.path.length === 1 && found.fallback) {
       return {
         success: false,
         noPath: true,
         scene: scene.name,
         grid,
         before,
-        message: 'No route around walls and enemies reaches that destination. The token did not move.',
+        message:
+          'No route gets any closer: walls, closed doors or other creatures are in the way. The token did not move. A closed door may need opening first (doors tool).',
       };
     }
 
     const maxSteps = options.maxDistance !== undefined ? options.maxDistance / unit : Infinity;
     const route = truncatePath(found, maxSteps, c => !occupied.has(cellKey(toAbs(c))));
     const end = route.path[route.path.length - 1];
-    const reachedGoal = route.path.length === found.path.length;
+    const reachedGoal = !found.fallback && route.path.length === found.path.length;
 
     if (route.path.length > 1) {
       // The route is wall-free, so place the token at its end directly
@@ -653,10 +689,8 @@ export class TableTools {
     const reach = opponents
       .map(o => {
         const cells = footprint(o);
-        const along = route.path.map(c => {
-          const p = center(toAbs(c));
-          return Math.min(...cells.map(t => this.distance(scene, p, center(t))));
-        });
+        // A wall between them means out of reach, however close
+        const along = route.path.map(c => Math.min(...cells.map(t => reachDistance(toAbs(c), t))));
         const events: string[] = [];
         for (const radius of [unit, unit * 2]) {
           for (let i = 1; i < along.length; i++) {
@@ -672,7 +706,13 @@ export class TableTools {
           events: [...new Set(events)],
         };
       })
-      .filter(x => x.events.length || x.endDistance <= unit * 2);
+      .filter(x => x.events.length || x.endDistance <= unit * 2)
+      // JSON has no Infinity: say "behind a wall" instead
+      .map(x => ({
+        ...x,
+        startDistance: Number.isFinite(x.startDistance) ? x.startDistance : 'behind a wall',
+        endDistance: Number.isFinite(x.endDistance) ? x.endDistance : 'behind a wall',
+      }));
 
     return {
       success: true,
@@ -684,13 +724,29 @@ export class TableTools {
       moved: Math.round(route.costs[route.costs.length - 1] * unit * 100) / 100,
       units: grid.units,
       reachedGoal,
-      ...(reachedGoal
-        ? {}
-        : { stoppedShort: true, stillToGo: Math.round((found.costs[found.costs.length - 1] - route.costs[route.costs.length - 1]) * unit * 100) / 100 }),
+      ...(found.fallback
+        ? {
+            closestReachable: true,
+            message:
+              'The destination (or reach of the target without a wall between) cannot be reached; the token moved as close as walls, doors and creatures allow.',
+          }
+        : reachedGoal
+          ? {}
+          : { stoppedShort: true, stillToGo: Math.round((found.costs[found.costs.length - 1] - route.costs[route.costs.length - 1]) * unit * 100) / 100 }),
       ...(target ? { toward: target.name, stopWithin } : {}),
       route: route.path.map(c => toAbs(c)),
       reach,
     };
+  }
+
+  /** Does a wall (or closed door) of this kind block the straight line between two points? */
+  private wallBetween(
+    a: { x: number; y: number },
+    b: { x: number; y: number },
+    type: 'move' | 'sight'
+  ): boolean {
+    const backend = (CONFIG as any).Canvas?.polygonBackends?.[type];
+    return !!backend?.testCollision(a, b, { type, mode: 'any' });
   }
 
   /**
