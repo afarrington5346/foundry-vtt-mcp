@@ -189,7 +189,7 @@ export class QuestCreationTools {
       {
         name: 'replace-journal-page',
         description:
-          'Replace the ENTIRE content of a specific journal page. Use this to overwrite/rewrite a page. For appending progress, use update-quest-journal instead.',
+          'Replace the ENTIRE content of a specific journal page. Use this to overwrite/rewrite a page. Pass pageName instead of pageId to write a page by name, creating it if the journal has none (e.g. the GM Log "Now" or "Prep" page). For appending progress, use update-quest-journal instead.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -202,6 +202,11 @@ export class QuestCreationTools {
               description:
                 'ID of the page whose content will be replaced. Get page IDs from list-journals.',
             },
+            pageName: {
+              type: 'string',
+              description:
+                'Instead of pageId: the page name. Replaces that page, or creates it if the journal has no page with that name.',
+            },
             newContent: {
               type: 'string',
               description:
@@ -213,7 +218,7 @@ export class QuestCreationTools {
                 'Optional new name for the page (rename the page while replacing its content).',
             },
           },
-          required: ['journalId', 'pageId', 'newContent'],
+          required: ['journalId', 'newContent'],
         },
       },
       {
@@ -570,12 +575,15 @@ export class QuestCreationTools {
    */
   async handleReplaceJournalPage(args: any): Promise<any> {
     try {
-      const requestSchema = z.object({
-        journalId: z.string().min(1, 'Journal ID is required'),
-        pageId: z.string().min(1, 'Page ID is required'),
-        newContent: z.string().min(1, 'New content is required'),
-        newPageName: z.string().optional(),
-      });
+      const requestSchema = z
+        .object({
+          journalId: z.string().min(1, 'Journal ID is required'),
+          pageId: z.string().min(1).optional(),
+          pageName: z.string().min(1).optional(),
+          newContent: z.string().min(1, 'New content is required'),
+          newPageName: z.string().optional(),
+        })
+        .refine(r => r.pageId || r.pageName, { message: 'Give pageId, or pageName to write a page by name' });
 
       const request = requestSchema.parse(args);
 
@@ -585,12 +593,13 @@ export class QuestCreationTools {
       // Format the replacement content for Foundry
       const replacementContent = this.formatUpdateContentForFoundry(request.newContent);
 
-      // Send the replacement via the module handler (Mode 2 replaces, no concat)
+      // By id: replace that page. By name: replace the page with that name, creating it if missing.
       const result = await this.foundryClient.query('foundry-mcp-bridge.updateJournalContent', {
         journalId: request.journalId,
         content: replacementContent,
-        pageId: request.pageId,
+        ...(request.pageId ? { pageId: request.pageId } : { newPageName: request.pageName }),
       });
+      if (!request.pageId && result?.pageId) request.pageId = result.pageId;
 
       if (!result) {
         throw new Error('Failed to replace journal page: No response from Foundry');

@@ -4446,8 +4446,17 @@ export class FoundryDataAccess {
         return { success: true, pageId: page.id, pageName: page.name };
       }
 
-      // Mode 2: Create a new page
+      // Mode 2: Write a page by name: update it if the journal has one, else create it
       if (request.newPageName) {
+        const wanted = request.newPageName.trim().toLowerCase();
+        const existing = journal.pages.find(
+          (p: any) => p.type === 'text' && p.name?.trim().toLowerCase() === wanted
+        );
+        if (existing) {
+          await existing.update({ 'text.content': request.content });
+          this.auditLog('updateJournalContent', request, 'success');
+          return { success: true, pageId: existing.id, pageName: existing.name };
+        }
         const created = await journal.createEmbeddedDocuments('JournalEntryPage', [
           {
             type: 'text',

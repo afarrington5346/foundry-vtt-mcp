@@ -58,10 +58,14 @@ const SCHEMAS = {
     note: z.string().optional(),
     animate: z.boolean().optional(),
     ignoreWalls: z.boolean().optional(),
+    path: z.boolean().optional(),
+    toward: z.string().min(1).optional(),
+    stopWithin: z.number().positive().optional(),
+    maxDistance: z.number().min(0).optional(),
     scene: sceneArg,
   }),
   'scene-snapshot': z.object({
-    maxSize: z.number().int().min(200).max(3000).default(1500),
+    maxSize: z.number().int().min(200).max(3000).default(800),
     scene: sceneArg,
   }),
   'show-journal': z.object({
@@ -194,7 +198,7 @@ export class TableTools {
       {
         name: 'token-grid',
         description:
-          "Token positions in grid terms, using the scene's own grid settings. Actions: report (each token's column/row, size and grid info), distance (between two tokens' centers, in scene units, using the scene's diagonal rule), move (a token by columns/rows, to a column/row, or to a named map note; reports blocked if a wall stops it).",
+          "Token positions in grid terms, using the scene's own grid settings. Actions: report (each token's column/row, size and grid info), distance (between two tokens' centers, in scene units, using the scene's diagonal rule), move (a token by columns/rows, to a column/row, to a named map note, or toward another token). For a creature's move use ONE call with toward (or to) + maxDistance (its speed): it routes around walls and closed doors and past enemies, stops at its speed, and reports whose reach it entered or left (reach[].events, e.g. \"entered 10 ft\") for Reactive Strike and opportunity attacks.",
         inputSchema: {
           type: 'object',
           properties: {
@@ -224,10 +228,30 @@ export class TableTools {
               description:
                 'move: animate (default false; Foundry v13 sometimes drops animated moves, which are then redone without animation)',
             },
+            toward: {
+              type: 'string',
+              description:
+                'move: token id to approach; ends within stopWithin of it (routed around walls)',
+            },
+            stopWithin: {
+              type: 'number',
+              description:
+                'move with toward: stop this close, in scene units (default one square, e.g. 5 ft; use 10 for reach weapons)',
+            },
+            maxDistance: {
+              type: 'number',
+              description:
+                "move: the creature's speed in scene units; the routed move stops after this much movement",
+            },
+            path: {
+              type: 'boolean',
+              description:
+                'move: route around walls (implied by toward or maxDistance). Without it, a move goes straight and a wall stops it.',
+            },
             ignoreWalls: {
               type: 'boolean',
               description:
-                'move: place the token even if walls are in the way (GM teleport). Without it, a move that walls stop returns blocked: true.',
+                'move: GM placement only (teleport through walls). Never for a creature moving on its turn.',
             },
             scene: SCENE_PROPERTY,
           },
@@ -243,7 +267,8 @@ export class TableTools {
           properties: {
             maxSize: {
               type: 'number',
-              description: 'Longest side in pixels (200-3000, default 1500)',
+              description:
+                'Longest side in pixels (200-3000, default 800). 600-800 is enough to see positions; go larger only to read map detail.',
             },
             scene: SCENE_PROPERTY,
           },

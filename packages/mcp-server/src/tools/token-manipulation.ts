@@ -116,7 +116,7 @@ export class TokenManipulationTools {
                 light: {
                   type: 'object',
                   description:
-                    'Light the token emits, in scene units. Torch: bright 20, dim 40. Hooded lantern: bright 30, dim 60. Candle: bright 5, dim 10. Light off: bright 0, dim 0.',
+                    'Light the token emits, in scene units (dim is the outer edge). Torch: bright 20, dim 40. Lamp: bright 15, dim 45. Hooded lantern: bright 30, dim 60. Candle: bright 5, dim 10. Light off: bright 0, dim 0.',
                   properties: {
                     bright: { type: 'number' },
                     dim: { type: 'number' },

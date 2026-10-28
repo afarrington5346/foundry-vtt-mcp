@@ -1,4 +1,5 @@
 import { FoundryDataAccess } from './data-access.js';
+import { findPath, truncatePath, type Cell } from './pathfind.js';
 
 /**
  * Game-table tools added in v0.8.6: token HP, combat, grid positions, scene
@@ -417,9 +418,21 @@ export class TableTools {
     note?: string;
     animate?: boolean;
     ignoreWalls?: boolean;
+    path?: boolean;
+    toward?: string;
+    stopWithin?: number;
+    maxDistance?: number;
   }): Promise<any> {
     const scene = this.scene(options.sceneId);
     const grid = this.gridInfo(scene);
+
+    if (
+      options.action === 'move' &&
+      !options.ignoreWalls &&
+      (options.path || options.toward || options.maxDistance !== undefined)
+    ) {
+      return this.routedMove(scene, options);
+    }
 
     if (options.action === 'report') {
       const tokens: any[] = options.tokenIds?.length
@@ -505,8 +518,8 @@ export class TableTools {
           after,
           target: { square: this.square(scene, target), position: { x: target.x, y: target.y } },
           message: moved
-            ? 'A wall stopped the token partway; it is now at the "after" position. Use ignoreWalls to place it on the target anyway.'
-            : 'Foundry did not move the token (a wall right next to it, or the move was refused). Use ignoreWalls to place it on the target anyway.',
+            ? 'A wall stopped the token partway; it is now at the "after" position. Use path: true to route around walls (ignoreWalls is only for placing tokens, never for creatures moving).'
+            : 'Foundry did not move the token (a wall right next to it, or the move was refused). Use path: true to route around walls (ignoreWalls is only for placing tokens, never for creatures moving).',
           ...notes,
         };
       }
@@ -514,6 +527,170 @@ export class TableTools {
     }
 
     throw new Error(`Unknown token-grid action: ${String(options.action)}`);
+  }
+
+  /**
+   * Move a token along the shortest route that doesn't cross walls or closed doors,
+   * to a square (to/by/note) or to within stopWithin of another token (toward),
+   * stopping at maxDistance (its speed). Reports whose reach the move entered or left,
+   * for reactions such as Reactive Strike and opportunity attacks.
+   */
+  private async routedMove(scene: any, options: any): Promise<any> {
+    const g = scene.grid;
+    if (g.isGridless || g.isHexagonal) throw new Error('Routed moves need a square grid');
+    if (!options.tokenId) throw new Error('move needs tokenId');
+    const grid = this.gridInfo(scene);
+    const unit = g.distance;
+    const token = this.token(scene, options.tokenId);
+    const before = this.tokenGridInfo(scene, token);
+
+    // Work in absolute grid offsets, bounded by the scene rectangle
+    const r = scene.dimensions.sceneRect;
+    const first = this.square(scene, { x: r.x, y: r.y })!;
+    const last = this.square(scene, { x: r.x + r.width - 1, y: r.y + r.height - 1 })!;
+    const toLocal = (c: Cell): Cell => ({ column: c.column - first.column, row: c.row - first.row });
+    const toAbs = (c: Cell): Cell => ({ column: c.column + first.column, row: c.row + first.row });
+    const cellKey = (c: Cell) => `${c.column},${c.row}`;
+    const center = (c: Cell) => {
+      const p = this.topLeftFor(scene, c);
+      return { x: p.x + g.size / 2, y: p.y + g.size / 2 };
+    };
+    const footprint = (t: any): Cell[] => {
+      const sq = this.square(scene, { x: t.x, y: t.y })!;
+      const cells: Cell[] = [];
+      for (let dc = 0; dc < Math.max(1, Math.round(t.width)); dc++) {
+        for (let dr = 0; dr < Math.max(1, Math.round(t.height)); dr++) {
+          cells.push({ column: sq.column + dc, row: sq.row + dr });
+        }
+      }
+      return cells;
+    };
+
+    // Who is where: anyone blocks the square for stopping; enemies also block passing
+    const sign = Math.sign(token.disposition ?? 0);
+    const others = Array.from<any>(scene.tokens).filter(t => t.id !== token.id);
+    const occupied = new Set<string>();
+    const hostileTo = new Set<string>();
+    const opponents: any[] = [];
+    for (const t of others) {
+      const opposing = sign !== 0 && Math.sign(t.disposition ?? 0) === -sign;
+      if (opposing && !t.hidden) opponents.push(t);
+      for (const c of footprint(t)) {
+        occupied.add(cellKey(c));
+        if (opposing) hostileTo.add(cellKey(c));
+      }
+    }
+
+    const backend = (CONFIG as any).Canvas?.polygonBackends?.move;
+    const blocked = (a: Cell, b: Cell) =>
+      !!backend?.testCollision(center(toAbs(a)), center(toAbs(b)), { type: 'move', mode: 'any' });
+
+    // Destination
+    let isGoal: (c: Cell) => boolean;
+    let target: any = null;
+    const stopWithin = options.stopWithin ?? unit;
+    if (options.toward) {
+      target = this.token(scene, options.toward);
+      const targetCells = footprint(target);
+      isGoal = c => {
+        const p = center(toAbs(c));
+        return targetCells.some(t => this.distance(scene, p, center(t)) <= stopWithin + 1e-6);
+      };
+    } else {
+      let goal: Cell;
+      if (options.note) {
+        const note = this.findNote(scene, options.note);
+        goal = this.square(scene, { x: note.x, y: note.y })!;
+      } else if (options.to) {
+        goal = options.to;
+      } else if (options.by) {
+        goal = { column: before.square.column + options.by.columns, row: before.square.row + options.by.rows };
+      } else {
+        throw new Error('move needs one of: to, by, note, toward');
+      }
+      const goalKey = cellKey(toLocal(goal));
+      isGoal = c => cellKey(c) === goalKey;
+    }
+
+    const diagonals = (CONST as any).GRID_DIAGONALS ?? {};
+    const rule = g.diagonals;
+    const diagonalCost =
+      rule === diagonals.EQUIDISTANT ? 1 : rule === diagonals.RECTILINEAR ? 2 : rule === diagonals.ILLEGAL ? Infinity : 1.5;
+
+    const start = toLocal(before.square);
+    const found = findPath({
+      start,
+      columns: last.column - first.column + 1,
+      rows: last.row - first.row + 1,
+      isGoal,
+      blocked,
+      passable: c => !hostileTo.has(cellKey(toAbs(c))),
+      canEnd: c => !occupied.has(cellKey(toAbs(c))),
+      diagonalCost,
+    });
+    if (!found) {
+      return {
+        success: false,
+        noPath: true,
+        scene: scene.name,
+        grid,
+        before,
+        message: 'No route around walls and enemies reaches that destination. The token did not move.',
+      };
+    }
+
+    const maxSteps = options.maxDistance !== undefined ? options.maxDistance / unit : Infinity;
+    const route = truncatePath(found, maxSteps, c => !occupied.has(cellKey(toAbs(c))));
+    const end = route.path[route.path.length - 1];
+    const reachedGoal = route.path.length === found.path.length;
+
+    if (route.path.length > 1) {
+      // The route is wall-free, so place the token at its end directly
+      await this.placeToken(token, this.topLeftFor(scene, toAbs(end)), { animate: false, ignoreWalls: true });
+    }
+
+    // Reach report: for each visible opponent, distance along the route at each step
+    const reach = opponents
+      .map(o => {
+        const cells = footprint(o);
+        const along = route.path.map(c => {
+          const p = center(toAbs(c));
+          return Math.min(...cells.map(t => this.distance(scene, p, center(t))));
+        });
+        const events: string[] = [];
+        for (const radius of [unit, unit * 2]) {
+          for (let i = 1; i < along.length; i++) {
+            if (along[i - 1] > radius && along[i] <= radius) events.push(`entered ${radius} ${grid.units}`);
+            if (along[i - 1] <= radius && along[i] > radius) events.push(`left ${radius} ${grid.units}`);
+          }
+        }
+        return {
+          tokenId: o.id,
+          name: o.name,
+          startDistance: along[0],
+          endDistance: along[along.length - 1],
+          events: [...new Set(events)],
+        };
+      })
+      .filter(x => x.events.length || x.endDistance <= unit * 2);
+
+    return {
+      success: true,
+      routed: true,
+      scene: scene.name,
+      grid,
+      before,
+      after: this.tokenGridInfo(scene, token),
+      moved: Math.round(route.costs[route.costs.length - 1] * unit * 100) / 100,
+      units: grid.units,
+      reachedGoal,
+      ...(reachedGoal
+        ? {}
+        : { stoppedShort: true, stillToGo: Math.round((found.costs[found.costs.length - 1] - route.costs[route.costs.length - 1]) * unit * 100) / 100 }),
+      ...(target ? { toward: target.name, stopWithin } : {}),
+      route: route.path.map(c => toAbs(c)),
+      reach,
+    };
   }
 
   /**
