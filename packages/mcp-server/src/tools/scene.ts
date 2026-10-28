@@ -24,7 +24,7 @@ export class SceneTools {
       {
         name: 'get-current-scene',
         description:
-          'Get information about a scene (the active scene unless `scene` is given), including tokens, layout, map notes, and the music binding (playlist + playlistSound). Reading another scene does not activate it.',
+          'Get information about a scene (the active scene unless `scene` is given), including tokens, layout, map notes, and the music binding (playlist + playlistSound). Reading another scene does not activate it. `lighting` (darkness 0–1, globalLight, tokenVision) and each token\'s vision, light and darkvision tell you whether a PC can see a given token: with token vision on and no global light, a PC without darkvision sees only lit areas.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -174,6 +174,7 @@ export class SceneTools {
         notes: sceneData.notes?.length || 0,
       },
     };
+    if (sceneData.lighting) response.lighting = sceneData.lighting;
 
     if (includeTokens && sceneData.tokens) {
       response.tokens = this.formatTokens(sceneData.tokens, includeHidden);
@@ -209,6 +210,9 @@ export class SceneTools {
         disposition: this.getDispositionName(token.disposition),
         hidden: token.hidden,
         hasImage: !!token.img,
+        ...(token.vision ? { vision: token.vision } : {}),
+        ...(token.light && (token.light.dim || token.light.bright) ? { light: token.light } : {}),
+        ...(token.darkvision ? { darkvision: token.darkvision } : {}),
       }));
   }
 

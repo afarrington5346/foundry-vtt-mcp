@@ -43,6 +43,8 @@ const SCHEMAS = {
     tokenIds: z.array(z.string().min(1)).optional(),
     allTokens: z.boolean().optional(),
     gmOnly: z.boolean().optional(),
+    reveal: z.boolean().optional(),
+    rollNpcs: z.boolean().optional(),
     scene: sceneArg,
   }),
   'token-grid': z.object({
@@ -147,7 +149,7 @@ export class TableTools {
       {
         name: 'combat',
         description:
-          'Run combat on a scene. Actions: status (turn order and whose turn it is), start (creates the encounter, adds tokenIds/allTokens, starts round 1), add, roll-npcs (rolls initiative for NPCs only; players roll their own from the tracker), roll (initiative for specific tokens), next-turn, previous-turn, next-round, end. Every action returns the turn order, current turn and which players still need to roll.',
+          'Run combat on a scene. Actions: status (turn order and whose turn it is), start (creates the encounter, adds tokenIds/allTokens, starts round 1), add, roll-npcs (rolls initiative for NPCs only; players roll their own from the tracker), roll (initiative for specific tokens), next-turn, previous-turn, next-round, end. Every action returns the turn order, current turn and which players still need to roll. Set up a fight in ONE call: start with every combatant\'s tokenIds (PCs and monsters), reveal: true to un-hide the monsters, rollNpcs: true. Don\'t roll player initiative for them.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -174,6 +176,15 @@ export class TableTools {
             gmOnly: {
               type: 'boolean',
               description: 'Roll initiative privately to the GM (roll-npcs/roll)',
+            },
+            reveal: {
+              type: 'boolean',
+              description:
+                'start/add: un-hide the listed tokenIds (map and tracker) before adding them. Not applied with allTokens.',
+            },
+            rollNpcs: {
+              type: 'boolean',
+              description: 'start/add: also roll initiative for every NPC combatant',
             },
             scene: SCENE_PROPERTY,
           },

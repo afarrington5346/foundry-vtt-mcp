@@ -1,6 +1,7 @@
 import { MODULE_ID, ERROR_MESSAGES, TOKEN_DISPOSITIONS } from './constants.js';
 import { permissionManager } from './permissions.js';
 import { transactionManager } from './transaction-manager.js';
+import { rollNatively, validateRollRequest } from './roll-request.js';
 // Local type definitions to avoid shared package import issues
 interface CharacterInfo {
   id: string;
@@ -209,6 +210,8 @@ interface SceneInfo {
     playlist: { id: string; name: string } | null;
     playlistSound: { id: string; name: string } | null;
   };
+  /** What players can see by: darkness 0 (bright) to 1 (dark), global light, token vision */
+  lighting: { darkness: number; globalLight: boolean; tokenVision: boolean };
 }
 
 interface SceneToken {
@@ -222,6 +225,12 @@ interface SceneToken {
   img: string;
   hidden: boolean;
   disposition: number;
+  /** The token's own sight (range 0 = sees only lit areas) */
+  vision: { enabled: boolean; range: number; mode: string };
+  /** Light the token gives off (a carried torch or lamp); 0/0 = none */
+  light: { dim: number; bright: number };
+  /** dnd5e darkvision range from the actor, in scene units (0 = none) */
+  darkvision: number;
 }
 
 interface SceneNote {
@@ -3885,7 +3894,23 @@ export class FoundryDataAccess {
         img: token.texture?.src || '',
         hidden: token.hidden,
         disposition: this.getTokenDisposition(token.disposition),
+        vision: {
+          enabled: !!token.sight?.enabled,
+          range: Number(token.sight?.range) || 0,
+          mode: token.sight?.visionMode || 'basic',
+        },
+        light: { dim: Number(token.light?.dim) || 0, bright: Number(token.light?.bright) || 0 },
+        darkvision: (() => {
+          const senses = token.actor?.system?.attributes?.senses;
+          return Number(senses?.ranges?.darkvision ?? senses?.darkvision) || 0;
+        })(),
       })),
+      lighting: {
+        // v12+ keeps these under Scene#environment; older fields are the fallback
+        darkness: Number(scene.environment?.darknessLevel ?? scene.darkness) || 0,
+        globalLight: !!(scene.environment?.globalLight?.enabled ?? scene.globalLight),
+        tokenVision: !!scene.tokenVision,
+      },
       walls: scene.walls.size,
       lights: scene.lights.size,
       sounds: scene.sounds.size,
@@ -5774,7 +5799,14 @@ export class FoundryDataAccess {
         };
       }
 
-      // Build roll formula based on type and target
+      // Attacks and damage roll through a named item: refuse an unknown one now, with
+      // the valid names, rather than post a button that can't roll it properly
+      const invalid = validateRollRequest(playerInfo.character, data.rollType, data.rollTarget);
+      if (invalid) {
+        return { success: false, message: '', error: invalid };
+      }
+
+      // Fallback formula, used only if the sheet roll isn't available when clicked
       const rollFormula = this.buildRollFormula(
         data.rollType,
         data.rollTarget,
@@ -5800,6 +5832,8 @@ export class FoundryDataAccess {
             <button class="mcp-roll-button mcp-button-active" 
                     data-button-id="${buttonId}"
                     data-roll-formula="${rollFormula}"
+                    data-roll-type="${data.rollType}"
+                    data-roll-target="${data.rollTarget.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')}"
                     data-roll-label="${buttonLabel}"
                     data-is-public="${data.isPublic}"
                     data-character-id="${playerInfo.character?.id || ''}"
@@ -5847,6 +5881,8 @@ export class FoundryDataAccess {
               [buttonId]: {
                 rolled: false,
                 rollFormula,
+                rollType: data.rollType,
+                rollTarget: data.rollTarget,
                 rollLabel: buttonLabel,
                 isPublic: data.isPublic,
                 characterId: playerInfo.character?.id || '',
@@ -6160,12 +6196,18 @@ export class FoundryDataAccess {
     switch (rollType) {
       case 'ability':
         return `${rollTarget.toUpperCase()} Ability Check (${visibility})`;
-      case 'skill':
-        return `${rollTarget.charAt(0).toUpperCase() + rollTarget.slice(1)} Skill Check (${visibility})`;
+      case 'skill': {
+        // Full skill name ("Perception"), not the code ("Prc")
+        const label = (CONFIG as any).DND5E?.skills?.[this.getSkillCode(rollTarget)]?.label;
+        const name = label ? game.i18n.localize(label) : rollTarget.charAt(0).toUpperCase() + rollTarget.slice(1);
+        return `${name} Check (${visibility})`;
+      }
       case 'save':
         return `${rollTarget.toUpperCase()} Saving Throw (${visibility})`;
       case 'attack':
         return `${rollTarget} Attack (${visibility})`;
+      case 'damage':
+        return `${rollTarget} Damage (${visibility})`;
       case 'initiative':
         return `Initiative Roll (${visibility})`;
       case 'custom':
@@ -6284,12 +6326,30 @@ export class FoundryDataAccess {
       }
 
       try {
-        // Create and evaluate the roll
+        const character = characterId ? game.actors?.get(characterId) : null;
+
+        // Roll through the sheet (item activity / actor) when possible
+        const native = await rollNatively(
+          character,
+          String(button.data('roll-type') ?? ''),
+          String(button.data('roll-target') ?? ''),
+          isPublic ? 'publicroll' : 'gmroll',
+          name => this.getSkillCode(name)
+        );
+        if (native === 'cancelled') {
+          // The player closed the roll dialog: leave the button live
+          button.prop('disabled', false);
+          button.text(originalText);
+          return;
+        }
+        if (native === 'rolled') {
+          if (game.user?.id) await this.updateRollButtonMessage(buttonId, game.user.id, rollLabel);
+          return;
+        }
+
+        // Fallback: the stored formula (custom rolls, or no sheet roll available)
         const roll = new Roll(rollFormula);
         await roll.evaluate();
-
-        // Get the character for speaker info
-        const character = characterId ? game.actors?.get(characterId) : null;
 
         // Use the modern Foundry v13 approach with roll.toMessage()
         const rollMode = isPublic ? 'publicroll' : 'whisper';
@@ -6324,7 +6384,6 @@ export class FoundryDataAccess {
         });
 
         // Update the ChatMessage to reflect rolled state
-        const buttonId = button.data('button-id');
         if (buttonId && game.user?.id) {
           try {
             await this.updateRollButtonMessage(buttonId, game.user.id, rollLabel);

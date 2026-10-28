@@ -257,21 +257,44 @@ export class TableTools {
     };
   }
 
+  /**
+   * @param reveal un-hide the named tokens first, so monsters that just entered the
+   *   fiction appear on the map and in the tracker in the same call (allTokens never
+   *   reveals: it would expose every hidden token on the scene)
+   * @returns ids of the tokens added and of the tokens revealed
+   */
   private async addCombatants(
     scene: any,
     combat: any,
     tokenIds?: string[],
-    all?: boolean
-  ): Promise<string[]> {
-    const tokens: any[] = all
-      ? Array.from<any>(scene.tokens)
-      : (tokenIds ?? []).map(id => this.token(scene, id));
+    all?: boolean,
+    reveal?: boolean
+  ): Promise<{ added: string[]; revealed: string[] }> {
+    const named: any[] = (tokenIds ?? []).map(id => this.token(scene, id));
+    const revealed = reveal ? named.filter(t => t.hidden).map(t => t.id) : [];
+    if (revealed.length) {
+      await scene.updateEmbeddedDocuments(
+        'Token',
+        revealed.map(id => ({ _id: id, hidden: false }))
+      );
+    }
+    const tokens: any[] = all ? Array.from<any>(scene.tokens) : named;
     const existing = new Set(combat.combatants.map((c: any) => c.tokenId));
     const data = tokens
       .filter(t => !existing.has(t.id))
       .map(t => ({ tokenId: t.id, sceneId: scene.id, actorId: t.actorId, hidden: t.hidden }));
     if (data.length) await combat.createEmbeddedDocuments('Combatant', data);
-    return data.map(d => d.tokenId);
+    if (revealed.length) {
+      // Combatants added earlier while their token was hidden stay hidden in the tracker
+      const stale = combat.combatants.filter((c: any) => revealed.includes(c.tokenId) && c.hidden);
+      if (stale.length) {
+        await combat.updateEmbeddedDocuments(
+          'Combatant',
+          stale.map((c: any) => ({ _id: c.id, hidden: false }))
+        );
+      }
+    }
+    return { added: data.map(d => d.tokenId), revealed };
   }
 
   async combat(options: {
@@ -289,6 +312,8 @@ export class TableTools {
     tokenIds?: string[];
     allTokens?: boolean;
     gmOnly?: boolean;
+    reveal?: boolean;
+    rollNpcs?: boolean;
   }): Promise<any> {
     const scene = this.scene(options.sceneId);
     let combat = this.findCombat(scene);
@@ -308,7 +333,11 @@ export class TableTools {
           combat = await Combat.create({ scene: scene.id, active: true });
           extra.created = true;
         }
-        extra.added = await this.addCombatants(scene, combat, options.tokenIds, options.allTokens);
+        Object.assign(
+          extra,
+          await this.addCombatants(scene, combat, options.tokenIds, options.allTokens, options.reveal)
+        );
+        if (options.rollNpcs) await combat.rollNPC({ messageOptions: { rollMode } });
         if (!combat.started) await combat.startCombat();
         break;
       }
@@ -323,7 +352,11 @@ export class TableTools {
         if (!options.tokenIds?.length && !options.allTokens) {
           throw new Error('Give tokenIds or set allTokens');
         }
-        extra.added = await this.addCombatants(scene, combat, options.tokenIds, options.allTokens);
+        Object.assign(
+          extra,
+          await this.addCombatants(scene, combat, options.tokenIds, options.allTokens, options.reveal)
+        );
+        if (options.rollNpcs) await combat.rollNPC({ messageOptions: { rollMode } });
         break;
       case 'roll-npcs':
         requireCombat();

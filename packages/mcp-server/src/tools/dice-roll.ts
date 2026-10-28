@@ -28,13 +28,13 @@ export class DiceRollTools {
             rollType: {
               type: 'string',
               description:
-                'Type of roll to request (ability, skill, save, attack, initiative, custom)',
-              enum: ['ability', 'skill', 'save', 'attack', 'initiative', 'custom'],
+                'Type of roll to request. The button rolls through the character sheet (dnd5e), with all of its bonuses: ability/skill/save/initiative from the actor, attack/damage from the named item. Use custom only for a roll the sheet has no entry for.',
+              enum: ['ability', 'skill', 'save', 'attack', 'damage', 'initiative', 'custom'],
             },
             rollTarget: {
               type: 'string',
               description:
-                'Target for the roll - can be ability name (str, dex, con, int, wis, cha), skill name (perception, insight, stealth, etc.), or custom roll formula',
+                'ability/save: str, dex, con, int, wis, cha. skill: the skill name (perception, insight, stealth…). attack/damage: the exact item name on the character (e.g. "Halberd"); an unknown name is refused with the valid ones. custom: a dice formula.',
             },
             targetPlayer: {
               type: 'string',
@@ -76,7 +76,7 @@ export class DiceRollTools {
 
   async handleRequestPlayerRolls(args: any) {
     const schema = z.object({
-      rollType: z.enum(['ability', 'skill', 'save', 'attack', 'initiative', 'custom']),
+      rollType: z.enum(['ability', 'skill', 'save', 'attack', 'damage', 'initiative', 'custom']),
       rollTarget: z.string(),
       targetPlayer: z.string(),
       isPublic: z.boolean(),

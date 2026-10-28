@@ -59,7 +59,7 @@ export class TokenManipulationTools {
       {
         name: 'update-token',
         description:
-          'Update various properties of a token such as visibility, disposition, size, rotation, elevation, or name',
+          'Update various properties of a token such as visibility, disposition, size, rotation, elevation, name, or the light it gives off (a lit torch or lamp)',
         inputSchema: {
           type: 'object',
           properties: {
@@ -112,6 +112,16 @@ export class TokenManipulationTools {
                 lockRotation: {
                   type: 'boolean',
                   description: 'Whether to lock the rotation',
+                },
+                light: {
+                  type: 'object',
+                  description:
+                    'Light the token emits, in scene units. Torch: bright 20, dim 40. Hooded lantern: bright 30, dim 60. Candle: bright 5, dim 10. Light off: bright 0, dim 0.',
+                  properties: {
+                    bright: { type: 'number' },
+                    dim: { type: 'number' },
+                    color: { type: 'string', description: 'Optional hex colour, e.g. "#ff9b40"' },
+                  },
                 },
               },
             },
@@ -245,6 +255,13 @@ export class TokenManipulationTools {
         name: z.string().optional(),
         elevation: z.number().optional(),
         lockRotation: z.boolean().optional(),
+        light: z
+          .object({
+            bright: z.number().min(0).optional(),
+            dim: z.number().min(0).optional(),
+            color: z.string().optional(),
+          })
+          .optional(),
       }),
       scene: z.string().min(1).optional(),
     });
